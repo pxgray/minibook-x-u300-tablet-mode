@@ -1,0 +1,20 @@
+[
+  {"id": "typing_desk", "base": [-3, 8, -1632], "display": [-787, 36, 450], "group": null, "expect": "laptop"},
+  {"id": "flat_open_desk", "base": [13, 2, -1620], "display": [3, 21, 809], "group": null, "expect": "laptop"},
+  {"id": "folded_tablet_desk", "base": [2, -6, 426], "display": [3, 26, 793], "group": null, "expect": "tablet"},
+  {"id": "reclined_typing_desk", "base": [-3, -6, -1616], "display": [-412, 31, 715], "group": null, "expect": "laptop"},
+  {"id": "hand_held_tent", "base": [320, 0, -1568], "display": [351, 15, 729], "group": null, "expect": "tablet"},
+  {"id": "self_standing_tent", "base": [892, 19, -1067], "display": [892, 0, 264], "group": null, "expect": "tablet"},
+  {"id": "presentation_flipped", "base": [18, 11, 437], "display": [-964, 25, 122], "group": null, "expect": "tablet"},
+  {"id": "lap_tilt_laying_down", "base": [699, 16, -1460], "display": [-969, -10, -297], "group": "orig_lap_pair", "expect": "laptop"},
+  {"id": "lap_tilt_sitting_up", "base": [-269, -14, -1636], "display": [-490, -6, 679], "group": "orig_lap_pair", "expect": "laptop"},
+  {"id": "lap_leaning_forward", "base": [-341, 21, -1519], "display": [-721, 37, 568], "group": "new_lap_pair", "expect": "laptop"},
+  {"id": "lap_reclined", "base": [-51, 54, -1703], "display": [-871, 65, 313], "group": "new_lap_pair", "expect": "laptop"},
+  {"id": "lap_laying_retake", "base": [785, 24, -1272], "display": [-950, 37, -446], "group": null, "expect": "laptop"},
+  {"id": "lap_upright_fixed", "base": [-61, 5, -1606], "display": [-651, 50, 632], "group": "fixed_hinge_triplet", "expect": "laptop"},
+  {"id": "lap_partial_fixed", "base": [441, 14, -1503], "display": [-933, 26, 241], "group": "fixed_hinge_triplet", "expect": "laptop"},
+  {"id": "lap_full_fixed", "base": [764, 2, -1355], "display": [-971, 18, -319], "group": "fixed_hinge_triplet", "expect": "laptop"},
+  {"id": "lap_25pct", "base": [199, 11, -1628], "display": [-969, 38, 164], "group": "gap_fill_triplet", "expect": "laptop"},
+  {"id": "lap_50pct", "base": [592, 25, -1479], "display": [-996, 24, -315], "group": "gap_fill_triplet", "expect": "laptop"},
+  {"id": "lap_75pct", "base": [837, 36, -1170], "display": [-926, 44, -560], "group": "gap_fill_triplet", "expect": "laptop"}
+]

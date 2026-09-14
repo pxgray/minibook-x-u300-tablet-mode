@@ -1,0 +1,31 @@
+=== Sensor Z-axis offset fit ===
+BASE_OFFSET Z = -603.60 raw counts (std 368.6 -> 33.8, leave-one-out range [-606.56, -599.77])
+DISPLAY_OFFSET Z = -178.43 raw counts (std 88.3 -> 20.9, leave-one-out range [-182.58, -173.36])
+
+=== Hinge axis / mounting rotation fit ===
+Fit cost: 3.388182e-02
+HINGE_AXIS (base frame, unit vector): (-0.004605, 0.999986, 0.002757)
+MOUNT_ROTATION quaternion (w,x,y,z) for Rust: (-0.816673, 0.007937, -0.576892, 0.013306)
+
+Per-reading signed angle (degrees) and Laptop/Tablet classification:
+  typing_desk               group=None                 expect=laptop   signed_angle=   57.98
+  flat_open_desk            group=None                 expect=laptop   signed_angle=  110.43
+  folded_tablet_desk        group=None                 expect=tablet   signed_angle=  -70.42
+  reclined_typing_desk      group=None                 expect=laptop   signed_angle=   84.60
+  hand_held_tent            group=None                 expect=tablet   signed_angle=  149.02
+  self_standing_tent        group=None                 expect=tablet   signed_angle= -124.31
+  presentation_flipped      group=None                 expect=tablet   signed_angle= -144.14
+  lap_tilt_laying_down      group=orig_lap_pair        expect=laptop   signed_angle=   51.75
+  lap_tilt_sitting_up       group=orig_lap_pair        expect=laptop   signed_angle=   65.17
+  lap_leaning_forward       group=new_lap_pair         expect=laptop   signed_angle=   45.10
+  lap_reclined              group=new_lap_pair         expect=laptop   signed_angle=   46.36
+  lap_laying_retake         group=None                 expect=laptop   signed_angle=   53.44
+  lap_upright_fixed         group=fixed_hinge_triplet  expect=laptop   signed_angle=   67.28
+  lap_partial_fixed         group=fixed_hinge_triplet  expect=laptop   signed_angle=   69.87
+  lap_full_fixed            group=fixed_hinge_triplet  expect=laptop   signed_angle=   56.79
+  lap_25pct                 group=gap_fill_triplet     expect=laptop   signed_angle=   50.01
+  lap_50pct                 group=gap_fill_triplet     expect=laptop   signed_angle=   45.82
+  lap_75pct                 group=gap_fill_triplet     expect=laptop   signed_angle=   53.11
+
+Laptop range: [45.10, 110.43]
+Tablet values: [np.float64(-144.14095055701824), np.float64(-124.3063352814307), np.float64(-70.41659871847047), np.float64(149.02301253589016)]
