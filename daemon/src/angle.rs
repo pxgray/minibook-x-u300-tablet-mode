@@ -66,24 +66,29 @@ fn quaternion_conjugate(q: (f64, f64, f64, f64)) -> (f64, f64, f64, f64) {
 /// Per-sensor raw additive Z-axis offset. A ~6 m/s^2 Z-axis DC offset on
 /// both sensors is documented in README.md's empirical validation and was
 /// independently confirmed on a different unit in the
-/// rhalkyard/minibook-dual-accelerometer project. Fitted here from 18 real
-/// readings spanning desk, tent, presentation, and reclined-lap postures
-/// (see scripts/calibration_data.json and scripts/calibrate_hinge_axis.py),
-/// via a sphere fit (leave-one-out stability under 1.2% across all 18
-/// readings) rather than a single at-rest measurement.
-pub const BASE_OFFSET: (f64, f64, f64) = (16.38, 0.0, -602.19);
-pub const DISPLAY_OFFSET: (f64, f64, f64) = (-19.29, 0.0, -160.36);
+/// rhalkyard/minibook-dual-accelerometer project (only a Z-axis offset is
+/// documented anywhere in prior art -- no X or Y component). Fitted here
+/// as a Z-only sphere fit from 18 real readings spanning desk, tent,
+/// presentation, and reclined-lap postures (see
+/// scripts/calibration_data.json and scripts/calibrate_hinge_axis.py),
+/// with leave-one-out stability under 1.2% across all 18 readings, rather
+/// than a single at-rest measurement. A small X-axis component also
+/// reduced residual slightly in testing, but was deliberately not used:
+/// it isn't corroborated by any prior art and the risk of fitting noise
+/// on a weakly-sampled axis outweighed the marginal improvement.
+pub const BASE_OFFSET: (f64, f64, f64) = (0.0, 0.0, -603.60);
+pub const DISPLAY_OFFSET: (f64, f64, f64) = (0.0, 0.0, -178.43);
 
 /// Hinge axis, calibrated for this specific unit, expressed in the base
 /// sensor's raw (x,y,z) frame after offset correction. Fitted by
 /// scripts/calibrate_hinge_axis.py against all 18 collected readings.
-pub const HINGE_AXIS: (f64, f64, f64) = (-0.004262, 0.999987, 0.002677);
+pub const HINGE_AXIS: (f64, f64, f64) = (-0.004605, 0.999986, 0.002757);
 
 /// Fixed rotation from base-referenced coordinates into the display
 /// sensor's own raw frame, as a unit quaternion (w, x, y, z). Fitted by
 /// scripts/calibrate_hinge_axis.py.
 pub const MOUNT_ROTATION: (f64, f64, f64, f64) =
-    (-0.710183, 0.005922, -0.703854, 0.013952);
+    (-0.816673, 0.007937, -0.576892, 0.013306);
 
 /// Signed, offset-corrected, tilt-corrected hinge angle in degrees, range
 /// (-180, 180]. Unlike `hinge_angle`, this corrects for each sensor's own
@@ -176,24 +181,24 @@ mod tests {
     #[test]
     fn signed_hinge_angle_matches_python_reference_for_all_readings() {
         let cases: &[(&str, (f64, f64, f64), (f64, f64, f64), f64)] = &[
-            ("typing_desk", (-3.0, 8.0, -1632.0), (-787.0, 36.0, 450.0), 37.9394),
-            ("flat_open_desk", (13.0, 2.0, -1620.0), (3.0, 21.0, 809.0), 91.6352),
-            ("folded_tablet_desk", (2.0, -6.0, 426.0), (3.0, 26.0, 793.0), -87.3549),
-            ("reclined_typing_desk", (-3.0, -6.0, -1616.0), (-412.0, 31.0, 715.0), 65.2539),
-            ("hand_held_tent", (320.0, 0.0, -1568.0), (351.0, 15.0, 729.0), 130.5630),
-            ("self_standing_tent", (892.0, 19.0, -1067.0), (892.0, 0.0, 264.0), -142.4170),
-            ("presentation_flipped", (18.0, 11.0, 437.0), (-964.0, 25.0, 122.0), -162.9189),
-            ("lap_tilt_laying_down", (699.0, 16.0, -1460.0), (-969.0, -10.0, -297.0), 30.8190),
-            ("lap_tilt_sitting_up", (-269.0, -14.0, -1636.0), (-490.0, -6.0, 679.0), 45.7979),
-            ("lap_leaning_forward", (-341.0, 21.0, -1519.0), (-721.0, 37.0, 568.0), 25.3021),
-            ("lap_reclined", (-51.0, 54.0, -1703.0), (-871.0, 65.0, 313.0), 26.1337),
-            ("lap_laying_retake", (785.0, 24.0, -1272.0), (-950.0, 37.0, -446.0), 32.4389),
-            ("lap_upright_fixed", (-61.0, 5.0, -1606.0), (-651.0, 50.0, 632.0), 47.5534),
-            ("lap_partial_fixed", (441.0, 14.0, -1503.0), (-933.0, 26.0, 241.0), 49.4841),
-            ("lap_full_fixed", (764.0, 2.0, -1355.0), (-971.0, 18.0, -319.0), 35.8747),
-            ("lap_25pct", (199.0, 11.0, -1628.0), (-969.0, 38.0, 164.0), 29.4976),
-            ("lap_50pct", (592.0, 25.0, -1479.0), (-996.0, 24.0, -315.0), 24.8350),
-            ("lap_75pct", (837.0, 36.0, -1170.0), (-926.0, 44.0, -560.0), 32.1177),
+            ("typing_desk", (-3.0, 8.0, -1632.0), (-787.0, 36.0, 450.0), 57.98),
+            ("flat_open_desk", (13.0, 2.0, -1620.0), (3.0, 21.0, 809.0), 110.43),
+            ("folded_tablet_desk", (2.0, -6.0, 426.0), (3.0, 26.0, 793.0), -70.42),
+            ("reclined_typing_desk", (-3.0, -6.0, -1616.0), (-412.0, 31.0, 715.0), 84.60),
+            ("hand_held_tent", (320.0, 0.0, -1568.0), (351.0, 15.0, 729.0), 149.02),
+            ("self_standing_tent", (892.0, 19.0, -1067.0), (892.0, 0.0, 264.0), -124.31),
+            ("presentation_flipped", (18.0, 11.0, 437.0), (-964.0, 25.0, 122.0), -144.14),
+            ("lap_tilt_laying_down", (699.0, 16.0, -1460.0), (-969.0, -10.0, -297.0), 51.75),
+            ("lap_tilt_sitting_up", (-269.0, -14.0, -1636.0), (-490.0, -6.0, 679.0), 65.17),
+            ("lap_leaning_forward", (-341.0, 21.0, -1519.0), (-721.0, 37.0, 568.0), 45.10),
+            ("lap_reclined", (-51.0, 54.0, -1703.0), (-871.0, 65.0, 313.0), 46.36),
+            ("lap_laying_retake", (785.0, 24.0, -1272.0), (-950.0, 37.0, -446.0), 53.44),
+            ("lap_upright_fixed", (-61.0, 5.0, -1606.0), (-651.0, 50.0, 632.0), 67.28),
+            ("lap_partial_fixed", (441.0, 14.0, -1503.0), (-933.0, 26.0, 241.0), 69.87),
+            ("lap_full_fixed", (764.0, 2.0, -1355.0), (-971.0, 18.0, -319.0), 56.79),
+            ("lap_25pct", (199.0, 11.0, -1628.0), (-969.0, 38.0, 164.0), 50.01),
+            ("lap_50pct", (592.0, 25.0, -1479.0), (-996.0, 24.0, -315.0), 45.82),
+            ("lap_75pct", (837.0, 36.0, -1170.0), (-926.0, 44.0, -560.0), 53.11),
         ];
 
         for (name, base, display, expected) in cases {
@@ -216,10 +221,10 @@ mod tests {
     #[test]
     fn laptop_and_tablet_readings_separate_cleanly() {
         let laptop_angles = [
-            37.9394, 91.6352, 65.2539, 30.8190, 45.7979, 25.3021, 26.1337, 32.4389, 47.5534,
-            49.4841, 35.8747, 29.4976, 24.8350, 32.1177,
+            57.98, 110.43, 84.60, 51.75, 65.17, 45.10, 46.36, 53.44, 67.28, 69.87, 56.79, 50.01,
+            45.82, 53.11,
         ];
-        let tablet_angles = [-87.3549, 130.5630, -142.4170, -162.9189];
+        let tablet_angles = [-70.42, 149.02, -124.31, -144.14];
 
         let laptop_min = laptop_angles.iter().cloned().fold(f64::INFINITY, f64::min);
         let laptop_max = laptop_angles
