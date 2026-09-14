@@ -159,12 +159,23 @@ fn main() -> ExitCode {
         last_display_mag = Some(display_mag);
         last_base_mag = Some(base_mag);
 
+        // signed_hinge_angle takes (base, display), the reverse of
+        // hinge_angle's (display, base) -- and returns Option<f64> since a
+        // degenerate near-parallel-to-hinge-axis orientation is possible
+        // (not expected in normal use).
         let angle_deg = if jerked {
-            held_angle.unwrap_or_else(|| angle::hinge_angle(display, base))
+            held_angle.unwrap_or_else(|| angle::signed_hinge_angle(base, display).unwrap_or(0.0))
         } else {
-            let a = angle::hinge_angle(display, base);
-            held_angle = Some(a);
-            a
+            match angle::signed_hinge_angle(base, display) {
+                Some(a) => {
+                    held_angle = Some(a);
+                    a
+                }
+                None => {
+                    eprintln!("minibookd: signed_hinge_angle degenerate this tick, skipping");
+                    continue;
+                }
+            }
         };
 
         if let Some(transition) = state_machine.update(angle_deg, now) {
