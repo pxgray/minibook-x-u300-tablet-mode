@@ -8,6 +8,7 @@ mod watchdog;
 
 use state::Transition;
 use std::process::ExitCode;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -58,7 +59,7 @@ fn main() -> ExitCode {
         };
     }
 
-    let mut uinput_switch = if opts.dry_run {
+    let uinput_switch = if opts.dry_run {
         None
     } else {
         match uinput::TabletSwitch::new() {
@@ -69,6 +70,15 @@ fn main() -> ExitCode {
             }
         }
     };
+    // Shared (not just owned by the poll loop) so the watchdog and signal
+    // handler below can also clear SW_TABLET_MODE before the process exits.
+    // Without this, GNOME only ever sees the device vanish while still
+    // reporting Tablet mode, never an explicit "leaving tablet mode" event,
+    // and (empirically, see README) can leave its own compositor-level
+    // input handling and orientation state stuck as a result -- not just
+    // the EC-level keyboard/touchpad disable that acpi::set_tablet_mode
+    // addresses.
+    let uinput_switch = Arc::new(Mutex::new(uinput_switch));
 
     // Startup reconciliation: the daemon always begins its own bookkeeping
     // in Laptop state and only acts on a *transition*, but a prior unclean
@@ -86,7 +96,7 @@ fn main() -> ExitCode {
         if let Err(e) = acpi::set_tablet_mode(&opts.acpi_path, false) {
             eprintln!("minibookd: startup reconciliation LTSM(0) failed: {e}");
         }
-        if let Some(sw) = uinput_switch.as_mut() {
+        if let Some(sw) = lock_switch(&uinput_switch).as_mut() {
             if let Err(e) = sw.set(false) {
                 eprintln!("minibookd: startup reconciliation uinput set failed: {e}");
             }
@@ -96,13 +106,45 @@ fn main() -> ExitCode {
     let watchdog = watchdog::Watchdog::new();
     if !opts.dry_run {
         let acpi_path = opts.acpi_path.clone();
+        let sw = Arc::clone(&uinput_switch);
         watchdog.spawn_monitor(WATCHDOG_TIMEOUT, move || {
             eprintln!("minibookd: watchdog triggered, forcing LTSM(0)");
             if let Err(e) = acpi::set_tablet_mode(&acpi_path, false) {
                 eprintln!("minibookd: watchdog revert failed: {e}");
             }
+            if let Some(sw) = lock_switch(&sw).as_mut() {
+                if let Err(e) = sw.set(false) {
+                    eprintln!("minibookd: watchdog uinput revert failed: {e}");
+                }
+            }
             std::process::exit(1);
         });
+
+        // Without this, SIGINT/SIGTERM (Ctrl+C, systemd stop) use the
+        // default disposition and kill the process immediately, skipping
+        // the revert below entirely -- if a transition to Tablet had
+        // fired, the keyboard/touchpad would stay disabled with no
+        // in-process recovery, same failure mode the startup
+        // reconciliation above already exists to clean up after the fact.
+        // Also clears the uinput switch (see its comment above) so GNOME
+        // sees an explicit "leaving tablet mode" event rather than just
+        // the device disappearing mid-Tablet.
+        let acpi_path = opts.acpi_path.clone();
+        let sw = Arc::clone(&uinput_switch);
+        ctrlc::set_handler(move || {
+            eprintln!("minibookd: caught termination signal, reverting to Laptop state");
+            let acpi_result = acpi::set_tablet_mode(&acpi_path, false);
+            if let Err(e) = &acpi_result {
+                eprintln!("minibookd: signal revert failed: {e}");
+            }
+            if let Some(sw) = lock_switch(&sw).as_mut() {
+                if let Err(e) = sw.set(false) {
+                    eprintln!("minibookd: signal uinput revert failed: {e}");
+                }
+            }
+            std::process::exit(if acpi_result.is_ok() { 0 } else { 1 });
+        })
+        .expect("failed to install signal handler");
     }
 
     let mut state_machine = state::StateMachine::new();
@@ -185,7 +227,7 @@ fn main() -> ExitCode {
         let base_tilt_deg = angle::base_tilt_from_level(base);
 
         if let Some(transition) = state_machine.update(angle_deg, base_tilt_deg, now) {
-            handle_transition(transition, &opts, &mut uinput_switch);
+            handle_transition(transition, &opts, &uinput_switch);
         }
 
         if opts.dry_run {
@@ -199,10 +241,16 @@ fn main() -> ExitCode {
     }
 }
 
+fn lock_switch(
+    switch: &Mutex<Option<uinput::TabletSwitch>>,
+) -> std::sync::MutexGuard<'_, Option<uinput::TabletSwitch>> {
+    switch.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 fn handle_transition(
     transition: Transition,
     opts: &cli::Cli,
-    uinput_switch: &mut Option<uinput::TabletSwitch>,
+    uinput_switch: &Mutex<Option<uinput::TabletSwitch>>,
 ) {
     let entering_tablet = matches!(transition, Transition::ToTablet);
 
@@ -215,7 +263,7 @@ fn handle_transition(
     }
 
     if entering_tablet {
-        if let Some(sw) = uinput_switch {
+        if let Some(sw) = lock_switch(uinput_switch).as_mut() {
             if let Err(e) = sw.set(true) {
                 eprintln!("minibookd: failed to set uinput switch: {e}");
             }
@@ -230,7 +278,7 @@ fn handle_transition(
             );
             std::process::exit(1);
         }
-        if let Some(sw) = uinput_switch {
+        if let Some(sw) = lock_switch(uinput_switch).as_mut() {
             if let Err(e) = sw.set(false) {
                 eprintln!("minibookd: failed to set uinput switch: {e}");
             }

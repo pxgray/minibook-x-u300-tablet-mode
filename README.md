@@ -6,9 +6,9 @@ convertible, under GNOME on Wayland. This variant is a newer board revision
 than any previously documented by the community and its ACPI implementation
 differs from the N100/N150 units covered by existing projects.
 
-**Status: research complete, daemon implementation not yet written.** This
-document is the findings writeup; see [Status](#status--whats-left) for
-what's left.
+**Status: daemon implemented and validated end-to-end on real hardware.**
+Screen auto-rotation orientation (`ACCEL_MOUNT_MATRIX`) still needs
+calibration; see [Status](#status--whats-left) for what's left.
 
 ## AI usage
 
@@ -29,10 +29,27 @@ This investigation was carried out in an interactive session with Claude
 - The daemon in [`daemon/`](daemon/) (~700 lines of Rust) was written by
   Claude in an agentic multi-pass implement-and-review process: separate
   implementer and reviewer passes cross-checked each other's work across
-  the daemon's modules before this fix wave. Unlike the scripts above, no
-  part of the daemon has been run against real hardware yet; that
-  validation is still pending (see the "Not yet validated against real
-  hardware" note in [Status](#status--whats-left)).
+  the daemon's modules before this fix wave. It has since been run
+  against real hardware and validated end-to-end (see empirical
+  validation finding 7).
+- Live-hardware validation of the daemon (finding 7) was also a heavily
+  corrective process, not a clean one. Claude twice misattributed real
+  hardware symptoms to the wrong cause before the repo owner corrected
+  it: an input flood and an orientation glitch were first guessed to be
+  an EC/firmware side effect of the `LTSM` call, based on an `evtest`
+  capture that on closer inspection was just the repo owner's own
+  typing; a later, more serious keyboard/touchpad failure requiring a
+  hard reboot was first misattributed to an unrelated spontaneous-suspend
+  issue on the machine, then to a fabricated timeline ("killed
+  mid-transition") and a claim that directly contradicted this
+  document's own empirical finding 1 (that the touchpad and keyboard
+  share a single disable register). Both were corrected only after the
+  repo owner explicitly pushed back and insisted on evidence over
+  speculation. The actual root causes -- an unsynchronized
+  `/proc/acpi/call` race across threads, and a missing `SIGINT`/`SIGTERM`
+  handler that skipped the revert entirely -- were found by reading the
+  code and reasoning from the repo owner's precise, corrected
+  observations, not from the earlier guesses.
 - The hinge-angle calibration (finding 5) was a heavily interactive,
   corrective process, not a clean implement-and-review pass: an earlier
   attempt at this same calibration was fully discarded mid-session after
@@ -455,11 +472,61 @@ false-positive reading above. The high-side (tent/presentation) entry is
 intentionally left ungated, since it was confirmed correctly classifying
 without this check.
 
-## Proposed architecture (implemented, not yet validated against real hardware)
+### 7. Daemon validated end-to-end on real hardware; three bugs found and fixed
 
-This architecture is now implemented, in [`daemon/`](daemon/) (the Rust
-daemon) and [`systemd/`](systemd/) (its service unit), but has not yet been
-run against real hardware; see [Status](#status--whats-left).
+Running `minibookd` live (not `--dry-run`) surfaced three real bugs, each
+diagnosed and fixed against the actual failure it caused:
+
+- **`/proc/acpi/call`'s response includes a trailing NUL byte** that
+  `str::trim()` doesn't strip (`\0` isn't Unicode whitespace), which broke
+  parsing of the startup reconciliation's `LTSM(0)` response
+  (`acpi::parse_response`). Fixed by trimming NUL alongside whitespace.
+- **No `SIGINT`/`SIGTERM` handler.** Killing the daemon with Ctrl+C while
+  a transition to Tablet had fired left the keyboard and touchpad
+  disabled with no in-process recovery -- confirmed directly: after one
+  such kill, neither the internal keyboard, the touchpad, nor a plugged-in
+  USB keyboard responded, and only a full power cycle recovered input.
+  Root-caused to this rather than a vendor firmware recovery bug by
+  reproducing the same `LTSM(0)` call independently via
+  `scripts/test-ltsm-switch.sh`, bypassing the daemon entirely, which
+  recovered both keyboard and touchpad cleanly. Fixed with a
+  `ctrlc`-based signal handler that reverts to Laptop state before
+  exiting, mirroring the existing watchdog's emergency-revert pattern.
+- **Unsynchronized concurrent access to `/proc/acpi/call`.** The main poll
+  loop, the watchdog thread, and (once added) the signal handler could
+  all call `acpi::set_tablet_mode` independently, with no serialization
+  around the shared, stateful write-then-read protocol that file expects.
+  Fixed with a module-level `Mutex` in `acpi.rs` serializing every call.
+- **The `uinput` `SW_TABLET_MODE` switch was never cleared before the
+  process exited on a signal**, only destroyed outright when its file
+  descriptor closed. GNOME had already been observed reacting broadly to
+  the switch (auto-rotate and the on-screen keyboard both engage
+  correctly while the daemon signals Tablet mode); losing the device
+  without an explicit `SW_TABLET_MODE=0` event first appears to be why
+  the keyboard/touchpad failure above also affected an external USB
+  keyboard, not just the EC-disabled internal one -- consistent with a
+  compositor-level input policy, not just the EC register. Fixed by
+  clearing the switch (in addition to the ACPI revert) on every exit
+  path: the signal handler, the watchdog's emergency revert, and the
+  normal `ToLaptop` transition.
+
+After all three fixes, a full live cycle (Laptop to Tablet to Laptop
+again, killed with Ctrl+C at various points including mid-Tablet) was
+confirmed working: transitions fire correctly in both directions, `LTSM`
+disables and re-enables the keyboard and touchpad correctly, and input is
+fully restored on exit without a reboot.
+
+One remaining, separate issue: the screen consistently lands in
+"Portrait Right" orientation after the daemon exits, rather than the
+correct orientation. Root cause understood, not yet fixed: see the
+`ACCEL_MOUNT_MATRIX` item in [Status](#status--whats-left).
+
+## Architecture (implemented and validated on real hardware)
+
+This architecture is implemented, in [`daemon/`](daemon/) (the Rust
+daemon) and [`systemd/`](systemd/) (its service unit), and has been
+validated end-to-end on real hardware; see [Status](#status--whats-left)
+and empirical validation finding 7.
 
 1. **Second accelerometer**: udev rule triggered off the first accelerometer's
    appearance, instantiating the second via the `new_device` sysfs mechanism
@@ -489,15 +556,21 @@ ACPI-calling module plus one small daemon owning one virtual switch device.
       (confirmed on real hardware: `iio:device1` appears after reboot with
       no manual step)
 - [ ] Determine `ACCEL_MOUNT_MATRIX` for each sensor (needed for screen
-      auto-rotation, not for hinge-angle detection)
+      auto-rotation, not for hinge-angle detection). Its absence now has a
+      concrete observed symptom (finding 7): once the daemon signals
+      `SW_TABLET_MODE=0` and GNOME falls back to raw accelerometer
+      orientation, the screen consistently lands in the wrong orientation
+      ("Portrait Right") rather than the correct one, since the raw axes
+      aren't yet mapped onto the panel correctly.
 - [x] Write the angle-sensor + `uinput` + `acpi_call` daemon (`daemon/`,
       Rust). It computes hinge angle from the two accelerometers, calls
       `acpi_call` to invoke `LTSM` on a state change, and emits a synthetic
-      `SW_TABLET_MODE` via `/dev/uinput` for GNOME. **Not yet validated
-      against real hardware** - run `minibookd --dry-run` and confirm
-      logged transitions match manual hinge movement before trusting it
-      live, per this repo's editorial standards; update this line and add
-      an "Empirical validation" entry once that's done.
+      `SW_TABLET_MODE` via `/dev/uinput` for GNOME. **Validated against
+      real hardware**: transitions correctly in both directions under
+      real (non-`--dry-run`) operation, and keyboard/touchpad correctly
+      disable and re-enable across a full Laptop-to-Tablet-to-Laptop
+      cycle, including on `SIGINT`/`SIGTERM`. See empirical validation
+      finding 7 for the three bugs live testing surfaced and fixed.
 - [x] systemd service, packaging (`systemd/minibookd.service`)
 - [x] Fix the `[0, 180]`-bounded hinge-angle formula's whole-body-tilt
       confound and fold-direction ambiguity: sensor Z-axis offset
@@ -507,8 +580,8 @@ ACPI-calling module plus one small daemon owning one virtual switch device.
       finding 5. **Open question, not fully resolved:** a smaller (~10-15
       degree) residual disagreement remains between some same-hinge-fold
       reading pairs; cause unidentified, doesn't appear to block practical
-      classification. Still pending real-hardware `--dry-run` validation,
-      same as the rest of the daemon.
+      classification, and did not surface as a problem during real-hardware
+      validation (finding 7).
 
 ## Reproducing / contributing
 
