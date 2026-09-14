@@ -144,7 +144,10 @@ fn handle_transition(
         }
     } else {
         if let Err(e) = acpi::set_tablet_mode(&opts.acpi_path, false) {
-            eprintln!("minibookd: LTSM(0) failed: {e}");
+            eprintln!(
+                "minibookd: LTSM(0) failed, exiting so systemd's ExecStopPost can retry the revert: {e}"
+            );
+            std::process::exit(1);
         }
         if let Some(sw) = uinput_switch {
             if let Err(e) = sw.set(false) {
