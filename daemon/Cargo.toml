@@ -1,0 +1,11 @@
+[package]
+name = "minibookd"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "minibookd"
+path = "src/main.rs"
+
+[dependencies]
+evdev = "0.13.2"
