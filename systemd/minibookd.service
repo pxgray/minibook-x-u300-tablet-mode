@@ -1,6 +1,7 @@
 [Unit]
 Description=MiniBook X tablet-mode daemon (hinge angle -> LTSM + SW_TABLET_MODE)
 After=multi-user.target
+ConditionPathExists=/proc/acpi/call
 
 [Service]
 Type=simple

@@ -11,11 +11,32 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
-const JERK_THRESHOLD: f64 = 4000.0; // raw units/sec; tune during --dry-run testing.
+// Fraction of magnitude per second; tune during real --dry-run testing.
+// Dimensionless so it applies evenly across sensors with different raw
+// counts-per-g (see the jerk computation in the poll loop below).
+const JERK_THRESHOLD_FRACTION: f64 = 1.5;
 const WATCHDOG_TIMEOUT: Duration = Duration::from_secs(5);
+
+const USAGE: &str = "minibookd: hinge-angle tablet-mode daemon for the Chuwi MiniBook X
+
+Usage: minibookd [OPTIONS]
+
+Options:
+  --dry-run                 Log what would happen; never touch real ACPI/uinput
+  --revert-only             Call LTSM(0) once and exit (used by ExecStopPost)
+  --acpi-path <path>        Override the LTSM ACPI method path
+  --display-accel <path>    Override the display accelerometer IIO device path
+  --base-accel <path>       Override the base accelerometer IIO device path
+  --help, -h                Print this message and exit";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("{USAGE}");
+        return ExitCode::SUCCESS;
+    }
+
     let opts = match cli::parse(&args) {
         Ok(opts) => opts,
         Err(e) => {
@@ -49,6 +70,29 @@ fn main() -> ExitCode {
         }
     };
 
+    // Startup reconciliation: the daemon always begins its own bookkeeping
+    // in Laptop state and only acts on a *transition*, but a prior unclean
+    // exit (a crash between LTSM(1) and reverting, or a manual test script
+    // whose revert didn't fire) can leave the EC's keyboard-disable
+    // register set and GNOME's last-known switch state stale even though
+    // this fresh process's state machine has never observed a transition.
+    // Unconditionally reconcile to known-good Laptop state here, once, up
+    // front, regardless of what the state machine believes. Best-effort:
+    // log failures but don't treat them as fatal, unlike the safety-critical
+    // ToLaptop transition handler below.
+    if opts.dry_run {
+        println!("minibookd: [dry-run] would perform startup reconciliation to Laptop state (LTSM(0), SW_TABLET_MODE=0)");
+    } else {
+        if let Err(e) = acpi::set_tablet_mode(&opts.acpi_path, false) {
+            eprintln!("minibookd: startup reconciliation LTSM(0) failed: {e}");
+        }
+        if let Some(sw) = uinput_switch.as_mut() {
+            if let Err(e) = sw.set(false) {
+                eprintln!("minibookd: startup reconciliation uinput set failed: {e}");
+            }
+        }
+    }
+
     let watchdog = watchdog::Watchdog::new();
     if !opts.dry_run {
         let acpi_path = opts.acpi_path.clone();
@@ -77,6 +121,10 @@ fn main() -> ExitCode {
             Ok(v) => v,
             Err(e) => {
                 eprintln!("minibookd: failed to read display accelerometer: {e}");
+                // Intentionally skip watchdog.heartbeat() below: persistent
+                // sensor read failures should eventually be treated like a
+                // hang and trigger the watchdog's revert, not go unnoticed
+                // forever.
                 continue;
             }
         };
@@ -84,6 +132,8 @@ fn main() -> ExitCode {
             Ok(v) => v,
             Err(e) => {
                 eprintln!("minibookd: failed to read base accelerometer: {e}");
+                // See the comment on the display-accelerometer read above:
+                // skipping the heartbeat here is intentional.
                 continue;
             }
         };
@@ -91,11 +141,18 @@ fn main() -> ExitCode {
         let display_mag = angle::magnitude(display);
         let base_mag = angle::magnitude(base);
 
+        // Jerk is normalized to a fraction of magnitude per second, not
+        // compared as a raw units/sec threshold: the display and base
+        // accelerometers have roughly 2x different raw counts-per-g
+        // (~809 vs. ~1620 per README.md's measurements), so a shared raw
+        // threshold would be twice as sensitive on one sensor as the
+        // other. Dividing by the previous magnitude puts both sensors on
+        // the same physical scale regardless of their raw counts-per-g.
         let jerked = match (last_display_mag, last_base_mag) {
             (Some(prev_d), Some(prev_b)) => {
-                let jd = angle::jerk(prev_d, display_mag, dt_secs).abs();
-                let jb = angle::jerk(prev_b, base_mag, dt_secs).abs();
-                jd > JERK_THRESHOLD || jb > JERK_THRESHOLD
+                let jd = (angle::jerk(prev_d, display_mag, dt_secs) / prev_d).abs();
+                let jb = (angle::jerk(prev_b, base_mag, dt_secs) / prev_b).abs();
+                jd > JERK_THRESHOLD_FRACTION || jb > JERK_THRESHOLD_FRACTION
             }
             _ => false,
         };
@@ -112,6 +169,13 @@ fn main() -> ExitCode {
 
         if let Some(transition) = state_machine.update(angle_deg, now) {
             handle_transition(transition, &opts, &mut uinput_switch);
+        }
+
+        if opts.dry_run {
+            println!(
+                "minibookd: [dry-run] angle={angle_deg:.1} state={:?}",
+                state_machine.current()
+            );
         }
 
         watchdog.heartbeat();
