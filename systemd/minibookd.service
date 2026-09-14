@@ -1,0 +1,13 @@
+[Unit]
+Description=MiniBook X tablet-mode daemon (hinge angle -> LTSM + SW_TABLET_MODE)
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/minibookd
+ExecStopPost=/usr/local/bin/minibookd --revert-only
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
