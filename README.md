@@ -233,10 +233,27 @@ assumption): `i2c_designware.0`-`.3` sit at PCI `00:15.0`-`.3`,
 ```
 
 brings it up as `iio:device1` (confirmed via `dmesg`: `i2c i2c-3:
-new_device: Instantiated device mxc4005 at 0x15`). This does **not** survive
-reboot yet; it needs a udev rule (not yet written) analogous to
-[rhalkyard's `60-sensor-chuwi.rules`](https://github.com/rhalkyard/minibook-dual-accelerometer/blob/main/hack-driver/60-sensor-chuwi.rules),
-pointed at `i2c-3` instead of `i2c-0`.
+new_device: Instantiated device mxc4005 at 0x15`).
+
+To make this survive reboot,
+[`udev/61-minibook-accelerometer.rules`](udev/61-minibook-accelerometer.rules)
+triggers the same instantiation automatically off the display
+accelerometer's `iio:device0` appearing (**confirmed working**: `iio:device1`
+comes up on its own after a reboot, with no manual step), adapted from
+[rhalkyard's `60-sensor-chuwi.rules`](https://github.com/rhalkyard/minibook-dual-accelerometer/blob/main/hack-driver/60-sensor-chuwi.rules)
+but pointed at `i2c-3` instead of `i2c-0`, and deliberately without setting
+`ACCEL_MOUNT_MATRIX` (not yet determined on this board, see
+[Status](#status--whats-left)) or handing off to a daemon service (none
+exists yet). Install it with:
+
+```sh
+sudo cp udev/61-minibook-accelerometer.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+```
+
+then reboot and confirm `iio:device1` appears without running
+`add-second-accelerometer.sh` manually.
 
 ### 4. Hinge-angle algorithm: validated against real hardware, zero calibration
 
@@ -304,7 +321,9 @@ ACPI-calling module plus one small daemon owning one virtual switch device.
       generation (rules out a DMI-allowlist-only fix)
 - [x] Bring up the second accelerometer and confirm its physical bus
 - [x] Validate the hinge-angle algorithm against real measurements
-- [ ] udev rule to auto-instantiate the second accelerometer at boot
+- [x] udev rule to auto-instantiate the second accelerometer at boot
+      (confirmed on real hardware: `iio:device1` appears after reboot with
+      no manual step)
 - [ ] Determine `ACCEL_MOUNT_MATRIX` for each sensor (needed for screen
       auto-rotation, not for hinge-angle detection)
 - [ ] Write the angle-sensor + `uinput` + `acpi_call` daemon
@@ -324,6 +343,7 @@ with [`scripts/dump-dsdt.sh`](scripts/dump-dsdt.sh) and search the output for
 | [`scripts/dump-dsdt.sh`](scripts/dump-dsdt.sh) | Dump + disassemble the live DSDT to find your unit's ACPI paths |
 | [`scripts/test-ltsm-switch.sh`](scripts/test-ltsm-switch.sh) | Safely test the `LTSM` ACPI method: keyboard/touchpad disable, event/dmesg/GPE/SensorProxy capture, with an automatic revert |
 | [`scripts/add-second-accelerometer.sh`](scripts/add-second-accelerometer.sh) | Instantiate the second (base) accelerometer |
+| [`udev/61-minibook-accelerometer.rules`](udev/61-minibook-accelerometer.rules) | Auto-instantiate the second accelerometer at boot (persists what the script above does manually) |
 | [`scripts/vector_angle.py`](scripts/vector_angle.py) | Compute the angle between the two accelerometer vectors, to validate hinge-angle detection |
 
 ## Related projects

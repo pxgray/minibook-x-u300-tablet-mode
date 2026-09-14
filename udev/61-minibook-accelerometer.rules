@@ -1,0 +1,22 @@
+# Auto-instantiate the second (base) accelerometer at boot.
+#
+# This board's ACPI tables only auto-enumerate the display accelerometer
+# (ACPI companion MDA6655:00, on i2c-1, appearing as iio:device0). The base
+# accelerometer on i2c-3 needs manual instantiation via the i2c `new_device`
+# sysfs mechanism (see scripts/add-second-accelerometer.sh); this rule
+# triggers that automatically the moment the display accelerometer is
+# enumerated by the kernel, so it survives reboot without a manual step.
+#
+# The i2c bus numbers here (i2c-1 display, i2c-3 base) are specific to the
+# U300 variant this repo documents -- confirmed via scripts/dump-dsdt.sh and
+# direct sysfs tracing, see README's "I2C bus mapping" notes. Community
+# projects targeting older N100/N150 units use i2c-0/i2c-1 instead. Do not
+# install this rule as-is without confirming your own unit's mapping first.
+#
+# Deliberately does NOT set ACCEL_MOUNT_MATRIX (not yet determined on this
+# board, see README Status) or ENV{SYSTEMD_WANTS} (no daemon service exists
+# yet). Both are left for a follow-up once those pieces land.
+
+SUBSYSTEM=="iio", KERNEL=="iio*", SUBSYSTEMS=="i2c", \
+        DEVPATH=="*/i2c-1/i2c-MDA6655:00/iio:device0", \
+        RUN+="/bin/sh -c 'echo mxc4005 0x15 > /sys/bus/i2c/devices/i2c-3/new_device'"
