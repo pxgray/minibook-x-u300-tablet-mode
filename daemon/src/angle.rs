@@ -1,3 +1,15 @@
+/// Computes the angle between two accelerometer vectors via
+/// `arccos((v1·v2)/(|v1||v2|))`.
+///
+/// Bounded to `[0, 180]` degrees, since `arccos` never returns outside
+/// that range. This means a full 360-degree hinge fold-back cannot
+/// currently be disambiguated from this value alone: tent/presentation
+/// mode, a closed lid, and a fully-folded tablet all bend the hinge to
+/// roughly the same physical angle from flat, so they all read as a low
+/// angle near 0 here, and there is no way from this number alone to tell
+/// them apart. Distinguishing them would need an additional, currently
+/// unmeasured signal (e.g. a signed disambiguation cue from real hardware
+/// measurements), not yet available.
 pub fn hinge_angle(v1: (f64, f64, f64), v2: (f64, f64, f64)) -> f64 {
     let dot = v1.0 * v2.0 + v1.1 * v2.1 + v1.2 * v2.2;
     let cos_theta = dot / (magnitude(v1) * magnitude(v2));

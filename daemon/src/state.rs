@@ -1,14 +1,21 @@
 use std::time::{Duration, Instant};
 
-/// Below this angle (coming from Laptop), or above TABLET_ENTER_HIGH,
-/// the hinge is considered folded into tablet mode.
+/// `angle::hinge_angle` is bounded to [0, 180] degrees (it's an `arccos`
+/// result), so only the "folded near closed" direction (low end of that
+/// range) is currently detectable as tablet mode. There is no high-side
+/// threshold: a value like 230 or 270 degrees, which would represent
+/// tent/presentation mode or a closed lid in a full 360-degree hinge
+/// model, can never actually be produced by `hinge_angle`, so no branch
+/// here can be written in terms of one. See `angle::hinge_angle`'s doc
+/// comment for why, and README.md's known-limitations note.
+///
+/// Below this angle (coming from Laptop), the hinge is considered folded
+/// into tablet mode.
 pub const TABLET_ENTER_LOW: f64 = 40.0;
-pub const TABLET_ENTER_HIGH: f64 = 230.0;
-/// Between these angles (coming from Tablet), the hinge is considered
-/// back in laptop mode. Set a few degrees inside the TABLET_ENTER_*
-/// thresholds so a reading sitting on the boundary doesn't flip-flop.
+/// Above this angle (coming from Tablet), the hinge is considered back in
+/// laptop mode. Set a few degrees above TABLET_ENTER_LOW so a reading
+/// sitting on the boundary doesn't flip-flop.
 pub const LAPTOP_ENTER_LOW: f64 = 50.0;
-pub const LAPTOP_ENTER_HIGH: f64 = 220.0;
 /// A candidate state must persist this long before it's confirmed.
 pub const DEBOUNCE: Duration = Duration::from_millis(750);
 
@@ -44,14 +51,14 @@ impl StateMachine {
     fn zone_for(angle_deg: f64, current: HingeState) -> HingeState {
         match current {
             HingeState::Laptop => {
-                if angle_deg < TABLET_ENTER_LOW || angle_deg > TABLET_ENTER_HIGH {
+                if angle_deg < TABLET_ENTER_LOW {
                     HingeState::Tablet
                 } else {
                     HingeState::Laptop
                 }
             }
             HingeState::Tablet => {
-                if angle_deg > LAPTOP_ENTER_LOW && angle_deg < LAPTOP_ENTER_HIGH {
+                if angle_deg > LAPTOP_ENTER_LOW {
                     HingeState::Laptop
                 } else {
                     HingeState::Tablet
@@ -135,15 +142,16 @@ mod tests {
         assert_eq!(sm.current(), HingeState::Laptop);
     }
 
-    #[test]
-    fn tent_angle_counts_as_tablet() {
-        let mut sm = StateMachine::new();
-        let t0 = Instant::now();
-        // 270 degrees: past TABLET_ENTER_HIGH (230), i.e. tent/presentation.
-        sm.update(270.0, t0);
-        let result = sm.update(270.0, t0 + Duration::from_millis(800));
-        assert_eq!(result, Some(Transition::ToTablet));
-    }
+    // A `tent_angle_counts_as_tablet` test previously asserted that 270.0
+    // degrees (tent/presentation mode, in a full 360-degree hinge model)
+    // registered as tablet mode via a since-removed TABLET_ENTER_HIGH
+    // branch. That input is not physically reachable: `angle::hinge_angle`
+    // is bounded to [0, 180] (arccos range) and can never return 270.0, so
+    // the test was asserting behavior the real system can never exercise.
+    // It was removed rather than kept green. Disambiguating tent mode (or
+    // a closed lid) from a true tablet fold is a known, currently
+    // unimplemented limitation pending new real-hardware measurements; see
+    // README.md's known-limitations note.
 
     #[test]
     fn folding_back_open_confirms_laptop_after_debounce() {
