@@ -326,8 +326,14 @@ ACPI-calling module plus one small daemon owning one virtual switch device.
       no manual step)
 - [ ] Determine `ACCEL_MOUNT_MATRIX` for each sensor (needed for screen
       auto-rotation, not for hinge-angle detection)
-- [ ] Write the angle-sensor + `uinput` + `acpi_call` daemon
-- [ ] systemd service, packaging
+- [x] Write the angle-sensor + `uinput` + `acpi_call` daemon (`daemon/`,
+      Rust; see `docs/superpowers/specs/2026-09-14-minibookd-daemon-design.md`
+      for the design). **Not yet validated against real hardware** - run
+      `minibookd --dry-run` and confirm logged transitions match manual
+      hinge movement before trusting it live, per this repo's editorial
+      standards; update this line and add an "Empirical validation" entry
+      once that's done.
+- [x] systemd service, packaging (`systemd/minibookd.service`)
 
 ## Reproducing / contributing
 
