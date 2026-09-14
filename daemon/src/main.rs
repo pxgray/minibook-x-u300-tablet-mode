@@ -1,5 +1,6 @@
 mod accel;
 mod angle;
+mod acpi;
 mod state;
 
 fn main() {
