@@ -26,6 +26,13 @@ This investigation was carried out in an interactive session with Claude
   hinge held at a given angle) were confirmed by human observation.
 - This README was drafted by Claude from the session's findings and
   edited by the repo owner before publishing.
+- The daemon in [`daemon/`](daemon/) (~700 lines of Rust) was written by
+  Claude in an agentic multi-pass implement-and-review process: separate
+  implementer and reviewer passes cross-checked each other's work across
+  the daemon's modules before this fix wave. Unlike the scripts above, no
+  part of the daemon has been run against real hardware yet; that
+  validation is still pending (see the "Not yet validated against real
+  hardware" note in [Status](#status--whats-left)).
 
 Nothing in this document is AI speculation presented as fact without
 a corresponding test recorded in [Empirical validation](#empirical-validation).
@@ -295,7 +302,11 @@ gravity (~9.8 m/s²) should be present. This appears to be a characteristic
 of the MXC4005/MXC6655 MEMS chip itself, not something specific to older
 board revisions.
 
-## Proposed architecture (not yet implemented)
+## Proposed architecture (implemented, not yet validated against real hardware)
+
+This architecture is now implemented, in [`daemon/`](daemon/) (the Rust
+daemon) and [`systemd/`](systemd/) (its service unit), but has not yet been
+run against real hardware; see [Status](#status--whats-left).
 
 1. **Second accelerometer**: udev rule triggered off the first accelerometer's
    appearance, instantiating the second via the `new_device` sysfs mechanism
@@ -327,13 +338,27 @@ ACPI-calling module plus one small daemon owning one virtual switch device.
 - [ ] Determine `ACCEL_MOUNT_MATRIX` for each sensor (needed for screen
       auto-rotation, not for hinge-angle detection)
 - [x] Write the angle-sensor + `uinput` + `acpi_call` daemon (`daemon/`,
-      Rust; see `docs/superpowers/specs/2026-09-14-minibookd-daemon-design.md`
-      for the design). **Not yet validated against real hardware** - run
-      `minibookd --dry-run` and confirm logged transitions match manual
-      hinge movement before trusting it live, per this repo's editorial
-      standards; update this line and add an "Empirical validation" entry
-      once that's done.
+      Rust). It computes hinge angle from the two accelerometers, calls
+      `acpi_call` to invoke `LTSM` on a state change, and emits a synthetic
+      `SW_TABLET_MODE` via `/dev/uinput` for GNOME. **Not yet validated
+      against real hardware** - run `minibookd --dry-run` and confirm
+      logged transitions match manual hinge movement before trusting it
+      live, per this repo's editorial standards; update this line and add
+      an "Empirical validation" entry once that's done.
 - [x] systemd service, packaging (`systemd/minibookd.service`)
+- [ ] **Known limitation:** the current hinge-angle formula (`arccos` of
+      the dot product between the two raw accelerometer vectors) is
+      mathematically bounded to `[0, 180]` degrees, so the daemon can only
+      detect tablet mode by the hinge folding toward fully closed (angle
+      below the 40 degree `TABLET_ENTER_LOW` threshold in
+      `daemon/src/state.rs`). It cannot currently distinguish tent/
+      presentation mode or a plain lid-close from a true tablet fold,
+      since both configurations bend the hinge to roughly the same
+      physical angle and so both read as a low angle near 0 from this
+      formula alone. Disambiguating them needs a new signal from real
+      hardware measurements (e.g. something that can tell direction of
+      fold, not just magnitude) that hasn't been taken yet; this is future
+      work, not done.
 
 ## Reproducing / contributing
 
