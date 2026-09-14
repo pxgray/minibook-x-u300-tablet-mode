@@ -29,6 +29,18 @@ pub const TABLET_ENTER_HIGH: f64 = 146.0;
 /// considered back in laptop mode. Set below TABLET_ENTER_HIGH so a
 /// reading sitting on the boundary doesn't flip-flop.
 pub const LAPTOP_ENTER_HIGH: f64 = 138.0;
+/// Gates the low-side Tablet entry only (see `zone_for`): a low signed
+/// hinge angle alone can't distinguish a lid closing while the unit rests
+/// normally on a surface from the unit actually being folded closed and
+/// picked up, since both can produce a similar angle. Real calibration
+/// data shows a clean gap -- ordinary desk/lap use never exceeds 2
+/// degrees of base tilt (see `angle::base_tilt_from_level`), while every
+/// genuine low-side Tablet reading (folded and picked up, or propped into
+/// a tent) is at least 62.6 degrees. 8 degrees sits well inside that gap.
+/// The high-side (tent/presentation) entry is intentionally left
+/// ungated: those postures were confirmed correctly classified without
+/// this check, and this constant is not used there.
+pub const BASE_TILT_THRESHOLD: f64 = 8.0;
 /// A candidate state must persist this long before it's confirmed.
 pub const DEBOUNCE: Duration = Duration::from_millis(750);
 
@@ -61,10 +73,12 @@ impl StateMachine {
         self.current
     }
 
-    fn zone_for(angle_deg: f64, current: HingeState) -> HingeState {
+    fn zone_for(angle_deg: f64, base_tilt_deg: f64, current: HingeState) -> HingeState {
         match current {
             HingeState::Laptop => {
-                if angle_deg < TABLET_ENTER_LOW || angle_deg > TABLET_ENTER_HIGH {
+                let low_side_tablet = angle_deg < TABLET_ENTER_LOW && base_tilt_deg > BASE_TILT_THRESHOLD;
+                let high_side_tablet = angle_deg > TABLET_ENTER_HIGH;
+                if low_side_tablet || high_side_tablet {
                     HingeState::Tablet
                 } else {
                     HingeState::Laptop
@@ -80,8 +94,8 @@ impl StateMachine {
         }
     }
 
-    pub fn update(&mut self, angle_deg: f64, now: Instant) -> Option<Transition> {
-        let target = Self::zone_for(angle_deg, self.current);
+    pub fn update(&mut self, angle_deg: f64, base_tilt_deg: f64, now: Instant) -> Option<Transition> {
+        let target = Self::zone_for(angle_deg, base_tilt_deg, self.current);
 
         if target == self.current {
             self.candidate = None;
@@ -123,25 +137,53 @@ mod tests {
         let mut sm = StateMachine::new();
         let t0 = Instant::now();
         // 70 degrees: comfortably inside [35, 138], e.g. typing_desk (58.0)
-        // to reclined_typing_desk (84.6) territory.
-        assert_eq!(sm.update(70.0, t0), None);
+        // to reclined_typing_desk (84.6) territory. Tilt is irrelevant
+        // here since the angle never approaches either gated threshold.
+        assert_eq!(sm.update(70.0, 0.0, t0), None);
         assert_eq!(sm.current(), HingeState::Laptop);
     }
 
     #[test]
-    fn folding_past_low_threshold_and_holding_debounce_confirms_tablet() {
+    fn folding_past_low_threshold_with_sufficient_tilt_and_holding_debounce_confirms_tablet() {
         let mut sm = StateMachine::new();
         let t0 = Instant::now();
-        // Crosses TABLET_ENTER_LOW (20) immediately: candidate, not yet confirmed.
-        assert_eq!(sm.update(10.0, t0), None);
+        // Crosses TABLET_ENTER_LOW (20) with tilt (20.0) above
+        // BASE_TILT_THRESHOLD (8): candidate, not yet confirmed.
+        assert_eq!(sm.update(10.0, 20.0, t0), None);
         assert_eq!(sm.current(), HingeState::Laptop);
         // Still within the debounce window: not yet confirmed.
-        assert_eq!(sm.update(10.0, t0 + Duration::from_millis(500)), None);
+        assert_eq!(sm.update(10.0, 20.0, t0 + Duration::from_millis(500)), None);
         assert_eq!(sm.current(), HingeState::Laptop);
         // Past the debounce window: confirmed.
-        let result = sm.update(10.0, t0 + Duration::from_millis(800));
+        let result = sm.update(10.0, 20.0, t0 + Duration::from_millis(800));
         assert_eq!(result, Some(Transition::ToTablet));
         assert_eq!(sm.current(), HingeState::Tablet);
+    }
+
+    // The finding that motivated BASE_TILT_THRESHOLD: a real dry-run
+    // reading of an "almost closed lid, resting normally on a surface"
+    // computed to a low signed angle (-39.9, well past TABLET_ENTER_LOW)
+    // but only 0.75 degrees of base tilt (angle.rs's
+    // base_tilt_from_level_matches_python_reference test has the same
+    // value under "almost_closed_lid_resting"). Without the tilt gate
+    // this incorrectly confirmed Tablet; with it, it must stay Laptop
+    // even held well past the debounce window.
+    #[test]
+    fn almost_closed_lid_resting_normally_does_not_confirm_tablet() {
+        let mut sm = StateMachine::new();
+        let t0 = Instant::now();
+        assert_eq!(sm.update(-39.9, 0.75, t0), None);
+        assert_eq!(sm.current(), HingeState::Laptop);
+        assert_eq!(
+            sm.update(-39.9, 0.75, t0 + Duration::from_millis(800)),
+            None
+        );
+        assert_eq!(sm.current(), HingeState::Laptop);
+        assert_eq!(
+            sm.update(-39.9, 0.75, t0 + Duration::from_secs(10)),
+            None
+        );
+        assert_eq!(sm.current(), HingeState::Laptop);
     }
 
     #[test]
@@ -150,11 +192,13 @@ mod tests {
         let t0 = Instant::now();
         // 155 degrees: past TABLET_ENTER_HIGH (146), e.g. tent/presentation
         // territory (real readings there: 149.0 to -144.1 wrapping around).
-        assert_eq!(sm.update(155.0, t0), None);
+        // The high side is intentionally ungated by tilt (tilt=0.0 here
+        // on purpose, to confirm this path doesn't require it).
+        assert_eq!(sm.update(155.0, 0.0, t0), None);
         assert_eq!(sm.current(), HingeState::Laptop);
-        assert_eq!(sm.update(155.0, t0 + Duration::from_millis(500)), None);
+        assert_eq!(sm.update(155.0, 0.0, t0 + Duration::from_millis(500)), None);
         assert_eq!(sm.current(), HingeState::Laptop);
-        let result = sm.update(155.0, t0 + Duration::from_millis(800));
+        let result = sm.update(155.0, 0.0, t0 + Duration::from_millis(800));
         assert_eq!(result, Some(Transition::ToTablet));
         assert_eq!(sm.current(), HingeState::Tablet);
     }
@@ -163,12 +207,12 @@ mod tests {
     fn brief_dip_into_tablet_zone_that_reverts_before_debounce_has_no_effect() {
         let mut sm = StateMachine::new();
         let t0 = Instant::now();
-        assert_eq!(sm.update(10.0, t0), None);
+        assert_eq!(sm.update(10.0, 20.0, t0), None);
         // Reverts to a laptop-zone angle before debounce elapses.
-        assert_eq!(sm.update(70.0, t0 + Duration::from_millis(300)), None);
+        assert_eq!(sm.update(70.0, 20.0, t0 + Duration::from_millis(300)), None);
         assert_eq!(sm.current(), HingeState::Laptop);
         // Even after what would have been the original debounce deadline.
-        assert_eq!(sm.update(70.0, t0 + Duration::from_millis(900)), None);
+        assert_eq!(sm.update(70.0, 20.0, t0 + Duration::from_millis(900)), None);
         assert_eq!(sm.current(), HingeState::Laptop);
     }
 
@@ -176,11 +220,11 @@ mod tests {
     fn folding_back_open_confirms_laptop_after_debounce() {
         let mut sm = StateMachine::new();
         let t0 = Instant::now();
-        sm.update(10.0, t0);
-        sm.update(10.0, t0 + Duration::from_millis(800)); // now Tablet
+        sm.update(10.0, 20.0, t0);
+        sm.update(10.0, 20.0, t0 + Duration::from_millis(800)); // now Tablet
         // Opens back up past LAPTOP_ENTER_LOW (35).
-        assert_eq!(sm.update(70.0, t0 + Duration::from_millis(900)), None);
-        let result = sm.update(70.0, t0 + Duration::from_millis(1700));
+        assert_eq!(sm.update(70.0, 20.0, t0 + Duration::from_millis(900)), None);
+        let result = sm.update(70.0, 20.0, t0 + Duration::from_millis(1700));
         assert_eq!(result, Some(Transition::ToLaptop));
         assert_eq!(sm.current(), HingeState::Laptop);
     }
@@ -191,9 +235,10 @@ mod tests {
         let t0 = Instant::now();
         // 27 degrees: inside TABLET_ENTER_LOW..LAPTOP_ENTER_LOW (20..35)
         // dead band, but still >= TABLET_ENTER_LOW, so from Laptop this
-        // must not register as a tablet candidate.
-        assert_eq!(sm.update(27.0, t0), None);
-        assert_eq!(sm.update(27.0, t0 + Duration::from_millis(800)), None);
+        // must not register as a tablet candidate. High tilt (20.0) here
+        // to confirm the dead band holds regardless of tilt.
+        assert_eq!(sm.update(27.0, 20.0, t0), None);
+        assert_eq!(sm.update(27.0, 20.0, t0 + Duration::from_millis(800)), None);
         assert_eq!(sm.current(), HingeState::Laptop);
     }
 
@@ -204,45 +249,63 @@ mod tests {
         // 142 degrees: inside LAPTOP_ENTER_HIGH..TABLET_ENTER_HIGH
         // (138..146) dead band, so from Laptop this must not register as
         // a tablet candidate either.
-        assert_eq!(sm.update(142.0, t0), None);
-        assert_eq!(sm.update(142.0, t0 + Duration::from_millis(800)), None);
+        assert_eq!(sm.update(142.0, 0.0, t0), None);
+        assert_eq!(sm.update(142.0, 0.0, t0 + Duration::from_millis(800)), None);
         assert_eq!(sm.current(), HingeState::Laptop);
     }
 
     // Real-data classification check: every one of the 18 readings
     // collected during this project's investigation must land in its
-    // expected zone under these thresholds. Values are the actual
+    // expected zone under these thresholds. Angle values are the actual
     // signed_hinge_angle outputs cross-validated in angle.rs's test
-    // module, not synthetic examples.
+    // module; tilt values are the actual base_tilt_from_level outputs
+    // for the same readings, in the same order. Not synthetic examples.
     #[test]
     fn real_readings_classify_correctly() {
         let expect_laptop = [
-            57.98, 110.43, 84.60, 51.75, 65.17, 45.10, 46.36, 53.44, 67.28, 69.87, 56.79, 50.01,
-            45.82, 53.11,
+            (57.98, 0.48),
+            (110.43, 0.74),
+            (84.60, 0.38),
+            (51.75, 39.23),
+            (65.17, 14.62),
+            (45.10, 20.47),
+            (46.36, 3.87),
+            (53.44, 49.60),
+            (67.28, 3.49),
+            (69.87, 26.13),
+            (56.79, 45.48),
+            (50.01, 11.01),
+            (45.82, 34.09),
+            (53.11, 55.94),
         ];
-        let expect_tablet = [-70.42, 149.02, -124.31, -144.14];
+        let expect_tablet = [
+            (-70.42, 179.65),
+            (149.02, 18.36),
+            (-124.31, 62.55),
+            (-144.14, 178.84),
+        ];
 
-        for angle in expect_laptop {
+        for (angle, tilt) in expect_laptop {
             let mut sm = StateMachine::new();
             let t0 = Instant::now();
-            sm.update(angle, t0);
-            sm.update(angle, t0 + DEBOUNCE + Duration::from_millis(50));
+            sm.update(angle, tilt, t0);
+            sm.update(angle, tilt, t0 + DEBOUNCE + Duration::from_millis(50));
             assert_eq!(
                 sm.current(),
                 HingeState::Laptop,
-                "angle {angle} should classify as Laptop"
+                "angle {angle} (tilt {tilt}) should classify as Laptop"
             );
         }
 
-        for angle in expect_tablet {
+        for (angle, tilt) in expect_tablet {
             let mut sm = StateMachine::new();
             let t0 = Instant::now();
-            sm.update(angle, t0);
-            sm.update(angle, t0 + DEBOUNCE + Duration::from_millis(50));
+            sm.update(angle, tilt, t0);
+            sm.update(angle, tilt, t0 + DEBOUNCE + Duration::from_millis(50));
             assert_eq!(
                 sm.current(),
                 HingeState::Tablet,
-                "angle {angle} should classify as Tablet"
+                "angle {angle} (tilt {tilt}) should classify as Tablet"
             );
         }
     }

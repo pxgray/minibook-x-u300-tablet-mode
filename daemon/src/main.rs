@@ -178,13 +178,19 @@ fn main() -> ExitCode {
             }
         };
 
-        if let Some(transition) = state_machine.update(angle_deg, now) {
+        // Gates the state machine's low-side Tablet entry: distinguishes a
+        // lid closing while the unit rests normally on a surface from the
+        // unit actually being folded closed and picked up. See
+        // state::BASE_TILT_THRESHOLD and angle::base_tilt_from_level.
+        let base_tilt_deg = angle::base_tilt_from_level(base);
+
+        if let Some(transition) = state_machine.update(angle_deg, base_tilt_deg, now) {
             handle_transition(transition, &opts, &mut uinput_switch);
         }
 
         if opts.dry_run {
             println!(
-                "minibookd: [dry-run] angle={angle_deg:.1} state={:?}",
+                "minibookd: [dry-run] angle={angle_deg:.1} tilt={base_tilt_deg:.1} state={:?}",
                 state_machine.current()
             );
         }

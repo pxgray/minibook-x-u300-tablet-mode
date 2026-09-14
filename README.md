@@ -402,6 +402,59 @@ unmoved between them, `null` otherwise), rerun the script, and update
 `BASE_OFFSET`/`DISPLAY_OFFSET`/`HINGE_AXIS`/`MOUNT_ROTATION` in
 `daemon/src/angle.rs` with the new fitted values.
 
+### 6. Base-tilt gate: distinguishing a closing lid from a folded-and-picked-up tablet
+
+Real-hardware `--dry-run` testing after finding 5 surfaced a false
+positive: an "almost closed" lid, resting normally on a surface (not
+picked up), triggered Tablet mode. A real reading from that position:
+
+```
+display (iio:device0): (-509, -6, -1058)
+base    (iio:device1):    (10, -9, -1634)
+angle between vectors:   26.0 deg
+```
+
+This computes to a signed angle of -39.9 degrees under the finding-5
+calibration, past `TABLET_ENTER_LOW`, so the low-side Tablet trigger fired
+correctly by its own logic. The problem is that low signed angle alone
+can't distinguish this from a genuine tablet fold: both a closing lid and
+a screen folded flat and picked up pass through similar angle values, and
+the calibration data already contains real Tablet-expected readings on
+this same low/negative side (`folded_tablet_desk`, `self_standing_tent`,
+`presentation_flipped`), so the threshold can't simply be moved without
+breaking those.
+
+What actually distinguishes them is the base sensor's own orientation.
+Computing the angle between the base's raw vector and the "resting
+normally" reference direction (`angle::base_tilt_from_level`) across all
+18 calibration readings:
+
+| Case | Signed angle | Base tilt from level |
+|---|---|---|
+| All ordinary desk-use readings | 57.98 to 110.4 | 0.4-0.7 degrees |
+| All ordinary lap-use readings (reclining tilts the whole unit, sometimes substantially) | 45.1 to 69.9 | 3.5-55.9 degrees |
+| The false-positive "almost closed" reading above | -39.9 | 0.75 degrees |
+| `self_standing_tent` (low-side Tablet, gated) | -124.3 | 62.6 degrees |
+| `folded_tablet_desk` / `presentation_flipped` (low-side Tablet, gated, flipped) | -70.4 / -144.1 | 179.7 / 178.8 degrees |
+| `hand_held_tent` (high-side Tablet, ungated by this check) | 149.0 | 18.4 degrees |
+
+The lap-use readings' base tilt overlaps with the genuine Tablet readings'
+range (both reach well past 8 degrees), which looks concerning at first,
+but doesn't matter in practice: every lap-use reading's *signed angle*
+stays at 45.1 or above, far short of `TABLET_ENTER_LOW` (20), so none of
+them ever reach the gated check regardless of their own tilt. The gate
+only has to separate cases that already have a low angle, and there the
+separation is clean: the false positive sits at 0.75 degrees, the nearest
+genuine low-side Tablet reading at 62.6, a wide margin either side of the
+chosen 8-degree threshold.
+
+`daemon/src/state.rs`'s low-side Tablet entry now additionally requires
+`angle::base_tilt_from_level(base) > BASE_TILT_THRESHOLD` (8 degrees),
+verified against all 18 calibration readings plus the specific
+false-positive reading above. The high-side (tent/presentation) entry is
+intentionally left ungated, since it was confirmed correctly classifying
+without this check.
+
 ## Proposed architecture (implemented, not yet validated against real hardware)
 
 This architecture is now implemented, in [`daemon/`](daemon/) (the Rust

@@ -125,6 +125,30 @@ pub fn signed_hinge_angle(
     Some(y.atan2(x).to_degrees())
 }
 
+/// Angle in degrees between the base sensor's (offset-corrected) raw
+/// vector and the "resting normally" reference direction (pure -Z in the
+/// base's own raw frame). Near 0 when the whole unit sits flat, keys-up,
+/// as in ordinary desk or lap use; grows as the unit is tilted, propped
+/// up (tent mode), or picked up and reoriented (flipped into a handheld
+/// tablet fold).
+///
+/// Used alongside `signed_hinge_angle` because a low signed hinge angle
+/// alone can't distinguish "the lid is closing while the unit rests
+/// normally on a surface" from "the unit has actually been folded closed
+/// and picked up" -- both can produce a similar signed_hinge_angle on
+/// their own, confirmed empirically: an "almost closed lid, resting
+/// normally" reading computed to a low signed angle (-39.9 degrees, well
+/// past `state::TABLET_ENTER_LOW`) with a base tilt of only 0.75 degrees,
+/// indistinguishable from ordinary desk use (0.2-2 degrees across all
+/// desk/lap calibration readings) and nothing like a genuine
+/// folded-and-picked-up tablet fold (62.6-179.7 degrees in the
+/// calibration data). See README.md's empirical validation.
+pub fn base_tilt_from_level(base_raw: (f64, f64, f64)) -> f64 {
+    let b = sub3(base_raw, BASE_OFFSET);
+    let mag = (b.0 * b.0 + b.1 * b.1 + b.2 * b.2).sqrt();
+    (-b.2 / mag).clamp(-1.0, 1.0).acos().to_degrees()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,6 +260,27 @@ mod tests {
             assert!(
                 a < laptop_min || a > laptop_max,
                 "tablet angle {a} should fall outside the laptop range [{laptop_min}, {laptop_max}]"
+            );
+        }
+    }
+
+    // Cross-validated against the same Python computation used for
+    // signed_hinge_angle's reference values, and against a real
+    // dry-run-reported reading (the "almost closed lid, resting normally"
+    // false-positive that motivated this function).
+    #[test]
+    fn base_tilt_from_level_matches_python_reference() {
+        let cases: &[(&str, (f64, f64, f64), f64)] = &[
+            ("typing_desk", (-3.0, 8.0, -1632.0), 0.48),
+            ("self_standing_tent", (892.0, 19.0, -1067.0), 62.55),
+            ("folded_tablet_desk", (2.0, -6.0, 426.0), 179.65),
+            ("almost_closed_lid_resting", (10.0, -9.0, -1634.0), 0.75),
+        ];
+        for (name, base, expected) in cases {
+            let tilt = base_tilt_from_level(*base);
+            assert!(
+                approx_eq(tilt, *expected, 0.01),
+                "{name}: got {tilt}, expected {expected}"
             );
         }
     }
