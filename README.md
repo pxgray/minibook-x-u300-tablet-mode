@@ -33,6 +33,17 @@ This investigation was carried out in an interactive session with Claude
   part of the daemon has been run against real hardware yet; that
   validation is still pending (see the "Not yet validated against real
   hardware" note in [Status](#status--whats-left)).
+- The hinge-angle calibration (finding 5) was a heavily interactive,
+  corrective process, not a clean implement-and-review pass: an earlier
+  attempt at this same calibration was fully discarded mid-session after
+  Claude asserted an unverified physical explanation (that the hinge had
+  moved between readings) as fact, then jumped from data-gathering
+  straight into live implementation without the repo owner's explicit
+  sign-off on that pacing. All accelerometer readings in
+  `calibration_data.json` were captured manually by the repo owner; the
+  fitting approach, threshold placement, and Z-only vs. X+Z offset
+  decision were each confirmed with the repo owner before being committed,
+  after that correction.
 
 Nothing in this document is AI speculation presented as fact without
 a corresponding test recorded in [Empirical validation](#empirical-validation).
@@ -302,6 +313,95 @@ gravity (~9.8 m/s²) should be present. This appears to be a characteristic
 of the MXC4005/MXC6655 MEMS chip itself, not something specific to older
 board revisions.
 
+### 5. Hinge-angle calibration: sensor offset correction, signed tilt-corrected angle
+
+The zero-calibration formula above (finding 4) was validated only with the
+laptop resting flat on a desk. Real-world `--dry-run` testing surfaced two
+problems with it away from a desk:
+
+- **Whole-body tilt corrupts the measured angle.** Two readings taken at
+  the same physical hinge fold (hinge confirmed unmoved) but different
+  whole-body posture (lying down vs. sitting up, laptop on legs in both
+  cases) produced measured angles 36 degrees apart with the desk-only
+  formula.
+- **`arccos` cannot express fold direction.** Bounded to `[0, 180]`, it
+  can't distinguish a forward recline from a backward tent/presentation
+  fold, since both can produce the same unsigned angle.
+
+Both trace to the same root cause: the formula only measures the angle
+*between* the two raw vectors, with no way to correct for whole-body tilt
+or recover a signed direction. Fixing this needed two independent
+corrections, both fitted from 18 real readings spanning desk, tent,
+presentation, and reclined-lap postures at varying whole-body tilt (see
+[`scripts/calibration_data.json`](scripts/calibration_data.json)):
+
+**Sensor Z-axis offset.** The ~6 m/s² DC offset noted in finding 4 isn't
+just a magnitude curiosity: left uncorrected, it distorts the *direction*
+computed from the raw vectors too, and the distortion grows with tilt.
+[`scripts/calibrate_hinge_axis.py`](scripts/calibrate_hinge_axis.py) fits
+a per-sensor additive Z-axis offset via a sphere fit (leave-one-out
+stability under 1.2% across all 18 readings, confirming a real, stable
+constant rather than a fitting artifact): base sensor -603.6 raw counts
+(-5.78 m/s²), display sensor: -178.4 raw counts (-1.71 m/s²). Both are
+close to independently-measured values in rhalkyard's own README on a
+*different* unit ("approximately -6 [m/s²]" on the Z axis), corroborating
+this as a real characteristic of the sensor family rather than
+unit-specific noise. Only Z is corrected; a small X-axis component
+marginally reduced residual in testing but isn't corroborated by any
+prior art and was deliberately not used, to avoid fitting noise on a
+weakly-sampled axis.
+
+**Hinge axis and sensor-mounting rotation.** With the offset corrected,
+the same script fits the physical hinge axis (expressed in the base
+sensor's raw frame) and the fixed rotation between the two sensors'
+mounting orientations, via nonlinear least-squares. Readings taken with
+the hinge confirmed unmoved between captures (marked with a shared
+`group` in the data file) become equality constraints in the fit, so no
+protractor is needed anywhere in this process. The result lets
+`daemon/src/angle.rs`'s `signed_hinge_angle` compute a **signed** angle
+via `atan2` instead of `arccos`, resolving fold direction, on top of the
+offset correction.
+
+**Validation.** Every one of the 18 readings' expected classification
+(Laptop vs. Tablet) is checked directly in both
+[`scripts/calibrate_hinge_axis.py`](scripts/calibrate_hinge_axis.py)'s
+output and `daemon/src/angle.rs`/`state.rs`'s test suites. Laptop-expected
+readings cluster in `[45.1, 110.4]` degrees; Tablet-expected readings sit
+outside that on both sides (as low as -144.1, as high as 149.0), a
+comfortable margin given the daemon only needs a binary split, not
+research-grade absolute-angle precision.
+
+**Known open question, not yet resolved.** A smaller residual disagreement
+remains between some same-hinge-fold reading pairs even after both
+corrections (on the order of 10-15 degrees in the worst case), smaller
+than the original 36-degree problem, but not fully explained. Several
+hypotheses were investigated and ruled out empirically: the hinge
+physically moving between readings (mechanically implausible on this
+unit and explicitly ruled out), leg instability during capture (ruled out
+by the specific stable knee-bent support position used), and an
+unconscious screen-angle adjustment while repositioning for comfortable
+typing (also ruled out). What actually causes it is unknown. It does not
+appear to block practical tablet-mode detection (see the classification
+margins above), and matches prior art's own experience: neither
+rhalkyard's nor bazmonk's implementation for this hardware corrects for
+sensor offset at all, both explicitly describing their result as
+"impact[ing] accuracy... though not unusably so" rather than resolved.
+This is flagged here as genuinely open, not swept under a "known
+limitation" label; revisit if a real hardware cause is ever identified.
+
+To reproduce or extend this calibration:
+
+```sh
+python3 scripts/calibrate_hinge_axis.py --self-test  # synthetic, no hardware needed
+python3 scripts/calibrate_hinge_axis.py              # real fit against calibration_data.json
+```
+
+To add more data, append readings to `calibration_data.json` (`group` set
+to a shared name for any two readings taken with the hinge confirmed
+unmoved between them, `null` otherwise), rerun the script, and update
+`BASE_OFFSET`/`DISPLAY_OFFSET`/`HINGE_AXIS`/`MOUNT_ROTATION` in
+`daemon/src/angle.rs` with the new fitted values.
+
 ## Proposed architecture (implemented, not yet validated against real hardware)
 
 This architecture is now implemented, in [`daemon/`](daemon/) (the Rust
@@ -346,19 +446,16 @@ ACPI-calling module plus one small daemon owning one virtual switch device.
       live, per this repo's editorial standards; update this line and add
       an "Empirical validation" entry once that's done.
 - [x] systemd service, packaging (`systemd/minibookd.service`)
-- [ ] **Known limitation:** the current hinge-angle formula (`arccos` of
-      the dot product between the two raw accelerometer vectors) is
-      mathematically bounded to `[0, 180]` degrees, so the daemon can only
-      detect tablet mode by the hinge folding toward fully closed (angle
-      below the 40 degree `TABLET_ENTER_LOW` threshold in
-      `daemon/src/state.rs`). It cannot currently distinguish tent/
-      presentation mode or a plain lid-close from a true tablet fold,
-      since both configurations bend the hinge to roughly the same
-      physical angle and so both read as a low angle near 0 from this
-      formula alone. Disambiguating them needs a new signal from real
-      hardware measurements (e.g. something that can tell direction of
-      fold, not just magnitude) that hasn't been taken yet; this is future
-      work, not done.
+- [x] Fix the `[0, 180]`-bounded hinge-angle formula's whole-body-tilt
+      confound and fold-direction ambiguity: sensor Z-axis offset
+      correction plus a calibrated, signed hinge angle
+      (`angle::signed_hinge_angle`), replacing the original
+      `angle::hinge_angle` in the live poll loop. See empirical validation
+      finding 5. **Open question, not fully resolved:** a smaller (~10-15
+      degree) residual disagreement remains between some same-hinge-fold
+      reading pairs; cause unidentified, doesn't appear to block practical
+      classification. Still pending real-hardware `--dry-run` validation,
+      same as the rest of the daemon.
 
 ## Reproducing / contributing
 
@@ -376,6 +473,8 @@ with [`scripts/dump-dsdt.sh`](scripts/dump-dsdt.sh) and search the output for
 | [`scripts/add-second-accelerometer.sh`](scripts/add-second-accelerometer.sh) | Instantiate the second (base) accelerometer |
 | [`udev/61-minibook-accelerometer.rules`](udev/61-minibook-accelerometer.rules) | Auto-instantiate the second accelerometer at boot (persists what the script above does manually) |
 | [`scripts/vector_angle.py`](scripts/vector_angle.py) | Compute the angle between the two accelerometer vectors, to validate hinge-angle detection |
+| [`scripts/calibrate_hinge_axis.py`](scripts/calibrate_hinge_axis.py) | Fit the sensor Z-axis offset and the hinge-axis/mounting-rotation calibration (`--self-test` for a synthetic check with no hardware needed) |
+| [`scripts/calibration_data.json`](scripts/calibration_data.json) | The 18 real readings the current calibration is fitted from |
 
 ## Related projects
 
