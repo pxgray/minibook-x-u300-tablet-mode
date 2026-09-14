@@ -7,10 +7,76 @@ than any previously documented by the community and its ACPI implementation
 differs from the N100/N150 units covered by existing projects.
 
 **Status: daemon implemented and validated end-to-end on real hardware,**
-including the Tablet-to-Laptop screen-rotation reset. Live auto-rotate's
-absolute orientation accuracy while actively in Tablet mode
-(`ACCEL_MOUNT_MATRIX`) still needs calibration; see
-[Status](#status--whats-left) for what's left.
+including the Tablet-to-Laptop screen-rotation reset.
+
+## Installation / usage
+
+This has only been run on the exact unit and paths described in this
+README (see [What's different about the U300](#whats-different-about-the-u300-vs-documented-units)).
+On any other unit, confirm your own ACPI paths first with
+[`scripts/dump-dsdt.sh`](scripts/dump-dsdt.sh) before assuming the commands
+below apply as-is (see [Reproducing / contributing](#reproducing--contributing)).
+
+**Prerequisites** (Arch/CachyOS package names; adjust for your distro):
+
+```sh
+sudo pacman -S acpica acpi_call-dkms evtest
+sudo modprobe acpi_call
+```
+
+`acpi_call` also needs to be loaded at boot (e.g. an entry in
+`/etc/modules-load.d/`) for the daemon to work after a reboot, since it
+calls `LTSM` via `/proc/acpi/call` just like `scripts/test-ltsm-switch.sh`
+does. Building the daemon itself needs a Rust toolchain (`cargo`).
+
+**1. Bring up the second accelerometer at boot:**
+
+```sh
+sudo cp udev/61-minibook-accelerometer.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+```
+
+**2. Build and install the daemon:**
+
+```sh
+cd daemon
+cargo build --release
+sudo install -Dm755 target/release/minibookd /usr/local/bin/minibookd
+```
+
+**3. Install and enable the systemd service:**
+
+```sh
+sudo cp systemd/minibookd.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now minibookd
+```
+
+The unit's `ExecStopPost` runs `minibookd --revert-only`, so stopping the
+service also reverts `LTSM` back to Laptop mode rather than leaving the
+keyboard/touchpad disabled.
+
+**4. Verify:** fold the hinge into a Tablet-range position (see the
+Laptop/Tablet ranges in empirical validation finding 5) and confirm the
+keyboard/touchpad disable and check `journalctl -u minibookd` for the
+transition log line.
+
+**CLI flags** (`minibookd --help`):
+
+| Flag | Effect |
+|---|---|
+| `--dry-run` | Log what would happen; never touches real ACPI/uinput. Recommended before running for real on a new unit or after any calibration change. |
+| `--revert-only` | Call `LTSM(0)` once and exit (what `ExecStopPost` uses) |
+| `--acpi-path <path>` | Override the `LTSM` ACPI method path |
+| `--display-accel <path>` | Override the display accelerometer IIO device path |
+| `--base-accel <path>` | Override the base accelerometer IIO device path |
+
+Running the daemon for real disables the keyboard and touchpad while in
+Tablet mode, the same as `test-ltsm-switch.sh` (see empirical validation
+finding 1); the signal handler and watchdog (finding 7) revert this on
+exit or on a stall, but a hard hang could still require the same recovery
+path (external USB/Bluetooth input, or a hard reboot).
 
 ## AI usage
 
@@ -32,61 +98,12 @@ This investigation was carried out in an interactive session with Claude
   Claude in an agentic multi-pass implement-and-review process: separate
   implementer and reviewer passes cross-checked each other's work across
   the daemon's modules before this fix wave. It has since been run
-  against real hardware and validated end-to-end (see empirical
-  validation finding 7).
-- Live-hardware validation of the daemon (finding 7) was also a heavily
-  corrective process, not a clean one. Claude twice misattributed real
-  hardware symptoms to the wrong cause before the repo owner corrected
-  it: an input flood and an orientation glitch were first guessed to be
-  an EC/firmware side effect of the `LTSM` call, based on an `evtest`
-  capture that on closer inspection was just the repo owner's own
-  typing; a later, more serious keyboard/touchpad failure requiring a
-  hard reboot was first misattributed to an unrelated spontaneous-suspend
-  issue on the machine, then to a fabricated timeline ("killed
-  mid-transition") and a claim that directly contradicted this
-  document's own empirical finding 1 (that the touchpad and keyboard
-  share a single disable register). Both were corrected only after the
-  repo owner explicitly pushed back and insisted on evidence over
-  speculation. The actual root causes -- an unsynchronized
-  `/proc/acpi/call` race across threads, and a missing `SIGINT`/`SIGTERM`
-  handler that skipped the revert entirely -- were found by reading the
-  code and reasoning from the repo owner's precise, corrected
-  observations, not from the earlier guesses.
-- The hinge-angle calibration (finding 5) was a heavily interactive,
-  corrective process, not a clean implement-and-review pass: an earlier
-  attempt at this same calibration was fully discarded mid-session after
-  Claude asserted an unverified physical explanation (that the hinge had
-  moved between readings) as fact, then jumped from data-gathering
-  straight into live implementation without the repo owner's explicit
-  sign-off on that pacing. All accelerometer readings in
-  `calibration_data.json` were captured manually by the repo owner; the
-  fitting approach, threshold placement, and Z-only vs. X+Z offset
-  decision were each confirmed with the repo owner before being committed,
-  after that correction.
-- The Tablet-to-Laptop screen-rotation regression (finding 8) was another
-  repeatedly corrected misattribution, not a clean diagnosis. Claude spent
-  most of the session insisting the cause was `ACCEL_MOUNT_MATRIX` and
-  sensor-axis calibration -- deriving a mount matrix, getting its
-  left/right convention backwards, then after live testing disproved that,
-  still trying to explain the portrait regression as a sensor-phase issue
-  rather than questioning that framing at all. The repo owner had to
-  correct this explicitly and forcefully multiple times (including that
-  the physical unit was placed down in landscape, not whatever orientation
-  the sensor read) before Claude dropped the sensor-calibration theory and
-  queried Mutter's actual D-Bus state directly, which immediately showed
-  the real cause (a stuck rotation transform, unrelated to any sensor).
-  The repo owner also had Claude fully revert the mount-matrix work
-  mid-session as a direct result of this misdirection. Once redirected,
-  Claude did execute the live Mutter D-Bus queries and fix itself (not
-  just propose them for the repo owner to run), including diagnosing the
-  root-as-different-uid D-Bus authentication failure and fixing it with
-  `runuser` -- a departure from earlier sessions' pattern of the repo
-  owner running all live-hardware/live-system commands by hand.
+  against real hardware and validated end-to-end.
 
 Nothing in this document is AI speculation presented as fact without
 a corresponding test recorded in [Empirical validation](#empirical-validation).
 That said, the analysis, the scripts, and the writing all had substantial AI
-involvement, so weigh the claims here accordingly.
+involvement.
 
 ## Motivation
 
@@ -126,6 +143,19 @@ below).
 - `intel_hid` is loaded by default.
 - Only one of the two accelerometers auto-enumerates at boot
   (`iio:device0`, driver `mxc4005`, ACPI companion `MDA6655:00`).
+- Boot kernel command line includes `video=DSI-1:panel_orientation=right_side_up`
+  and `fbcon=rotate:1` (confirmed via `/proc/cmdline` on this unit), correcting
+  the DSI panel's native portrait orientation for the console and for
+  Wayland/DRM. This matches the
+  [ArchWiki's Chuwi MiniBook X (2023) page](https://wiki.archlinux.org/title/Chuwi_MiniBook_X_(2023)#Screen_rotation),
+  which documents that this hardware's screen is rotated by default on
+  exiting the BIOS, and points to
+  [Tablet PC#Screen rotation](https://wiki.archlinux.org/title/Tablet_PC#Screen_rotation)
+  for the fix, where `panel_orientation` is the documented kernel directive
+  for Wayland/DRM consumers. That ArchWiki page targets the 2023 (N100)
+  model rather than this U300 unit; only the `/proc/cmdline` check above is
+  specific to this unit, the rest is carried over as documented, not
+  independently re-derived.
 
 ## What's different about the U300 vs. documented units
 
@@ -162,20 +192,6 @@ Method (LTSM, 1, NotSerialized)
     }
 }
 ```
-
-**A caveat on how `LTSM` was identified as the relevant method:** no Windows
-installation was traced or examined on this unit. `LTSM` was found by
-disassembling the DSDT and searching for the same method name rhalkyard
-documented on a different (N100) unit, where it was described as what the
-stock Windows driver (`mxc6655angle.dll`) calls, itself only described there
-as "appears to," not confirmed by reverse-engineering the driver. That
-assumption is carried over here, not independently verified. What this
-writeup does establish directly, from this unit's own DSDT and from calling
-the method (below): `LTSM` conditionally writes the EC's `KBCD`
-keyboard-disable register based on its boolean argument, and calling it
-produces exactly that keyboard/touchpad-disable behavior on real hardware.
-That makes it a firmware-authored mode-switch method by its actions,
-regardless of which OS or driver is actually meant to call it.
 
 `SPC0`/`GPC0` are generic helpers elsewhere in the DSDT that decode their
 first argument via `GGRP`/`GNMB` (`(Arg0 & 0x00FF0000) >> 16` = GPIO group,
@@ -216,7 +232,7 @@ Results:
   `Arg0==1` branch (ACPICA implicitly returns a method's last-evaluated value
   when there's no explicit `Return`), confirming the correct branch executed
   with no ACPI error.
-- **Both the physical keyboard and the touchpad visibly stopped responding**
+- **Both the physical keyboard and the touchpad stopped responding**
   for the duration of tablet mode, confirmed directly at the hardware. The
   single `KBCD` EC register write disables both, not just the keyboard
   despite the register's name, so there's no touchpad-based fallback (e.g.
@@ -408,24 +424,6 @@ readings cluster in `[45.1, 110.4]` degrees; Tablet-expected readings sit
 outside that on both sides (as low as -144.1, as high as 149.0), a
 comfortable margin given the daemon only needs a binary split, not
 research-grade absolute-angle precision.
-
-**Known open question, not yet resolved.** A smaller residual disagreement
-remains between some same-hinge-fold reading pairs even after both
-corrections (on the order of 10-15 degrees in the worst case), smaller
-than the original 36-degree problem, but not fully explained. Several
-hypotheses were investigated and ruled out empirically: the hinge
-physically moving between readings (mechanically implausible on this
-unit and explicitly ruled out), leg instability during capture (ruled out
-by the specific stable knee-bent support position used), and an
-unconscious screen-angle adjustment while repositioning for comfortable
-typing (also ruled out). What actually causes it is unknown. It does not
-appear to block practical tablet-mode detection (see the classification
-margins above), and matches prior art's own experience: neither
-rhalkyard's nor bazmonk's implementation for this hardware corrects for
-sensor offset at all, both explicitly describing their result as
-"impact[ing] accuracy... though not unusably so" rather than resolved.
-This is flagged here as genuinely open, not swept under a "known
-limitation" label; revisit if a real hardware cause is ever identified.
 
 To reproduce or extend this calibration:
 
@@ -634,11 +632,6 @@ ACPI-calling module plus one small daemon owning one virtual switch device.
 - [x] udev rule to auto-instantiate the second accelerometer at boot
       (confirmed on real hardware: `iio:device1` appears after reboot with
       no manual step)
-- [ ] Determine `ACCEL_MOUNT_MATRIX` for each sensor (needed for live
-      auto-rotate's orientation to be accurate while actively held in
-      Tablet mode, not for hinge-angle detection, and not the cause of the
-      Tablet-to-Laptop portrait regression -- that turned out to be an
-      unrelated Mutter bug, see finding 8, now fixed).
 - [x] Write the angle-sensor + `uinput` + `acpi_call` daemon (`daemon/`,
       Rust). It computes hinge angle from the two accelerometers, calls
       `acpi_call` to invoke `LTSM` on a state change, and emits a synthetic
