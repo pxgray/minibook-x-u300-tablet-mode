@@ -2,6 +2,7 @@ mod accel;
 mod acpi;
 mod angle;
 mod cli;
+mod display;
 mod state;
 mod uinput;
 mod watchdog;
@@ -282,6 +283,15 @@ fn handle_transition(
             if let Err(e) = sw.set(false) {
                 eprintln!("minibookd: failed to set uinput switch: {e}");
             }
+        }
+        // Best-effort: Mutter was empirically observed leaving an explicit
+        // 90-degree rotation in place after this transition instead of
+        // resetting to the panel_orientation-corrected landscape default
+        // (see README's Empirical validation section). Not
+        // safety-critical like the reverts above, so a failure here is
+        // logged but doesn't change the transition's outcome.
+        if let Err(e) = display::reset_rotation() {
+            eprintln!("minibookd: failed to reset display rotation: {e}");
         }
     }
 }

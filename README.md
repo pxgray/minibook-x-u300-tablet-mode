@@ -6,9 +6,11 @@ convertible, under GNOME on Wayland. This variant is a newer board revision
 than any previously documented by the community and its ACPI implementation
 differs from the N100/N150 units covered by existing projects.
 
-**Status: daemon implemented and validated end-to-end on real hardware.**
-Screen auto-rotation orientation (`ACCEL_MOUNT_MATRIX`) still needs
-calibration; see [Status](#status--whats-left) for what's left.
+**Status: daemon implemented and validated end-to-end on real hardware,**
+including the Tablet-to-Laptop screen-rotation reset. Live auto-rotate's
+absolute orientation accuracy while actively in Tablet mode
+(`ACCEL_MOUNT_MATRIX`) still needs calibration; see
+[Status](#status--whats-left) for what's left.
 
 ## AI usage
 
@@ -61,6 +63,25 @@ This investigation was carried out in an interactive session with Claude
   fitting approach, threshold placement, and Z-only vs. X+Z offset
   decision were each confirmed with the repo owner before being committed,
   after that correction.
+- The Tablet-to-Laptop screen-rotation regression (finding 8) was another
+  repeatedly corrected misattribution, not a clean diagnosis. Claude spent
+  most of the session insisting the cause was `ACCEL_MOUNT_MATRIX` and
+  sensor-axis calibration -- deriving a mount matrix, getting its
+  left/right convention backwards, then after live testing disproved that,
+  still trying to explain the portrait regression as a sensor-phase issue
+  rather than questioning that framing at all. The repo owner had to
+  correct this explicitly and forcefully multiple times (including that
+  the physical unit was placed down in landscape, not whatever orientation
+  the sensor read) before Claude dropped the sensor-calibration theory and
+  queried Mutter's actual D-Bus state directly, which immediately showed
+  the real cause (a stuck rotation transform, unrelated to any sensor).
+  The repo owner also had Claude fully revert the mount-matrix work
+  mid-session as a direct result of this misdirection. Once redirected,
+  Claude did execute the live Mutter D-Bus queries and fix itself (not
+  just propose them for the repo owner to run), including diagnosing the
+  root-as-different-uid D-Bus authentication failure and fixing it with
+  `runuser` -- a departure from earlier sessions' pattern of the repo
+  owner running all live-hardware/live-system commands by hand.
 
 Nothing in this document is AI speculation presented as fact without
 a corresponding test recorded in [Empirical validation](#empirical-validation).
@@ -516,17 +537,70 @@ confirmed working: transitions fire correctly in both directions, `LTSM`
 disables and re-enables the keyboard and touchpad correctly, and input is
 fully restored on exit without a reboot.
 
-One remaining, separate issue: the screen consistently lands in
-"Portrait Right" orientation after the daemon exits, rather than the
-correct orientation. Root cause understood, not yet fixed: see the
-`ACCEL_MOUNT_MATRIX` item in [Status](#status--whats-left).
+One remaining, separate issue observed during this testing: the screen
+consistently landed in portrait orientation after the Tablet-to-Laptop
+transition, rather than the correct landscape. At the time this looked
+like an `ACCEL_MOUNT_MATRIX` problem; it wasn't -- see finding 8, which
+identifies and fixes the actual cause.
+
+### 8. Screen stuck in portrait after Tablet-to-Laptop was a Mutter bug, not a sensor-calibration problem
+
+The portrait regression from finding 7 persisted even with no
+`ACCEL_MOUNT_MATRIX` set and the daemon running continuously and
+uninterrupted under systemd (i.e. with the uinput device never
+disappearing and `SW_TABLET_MODE` being cleared normally through
+`handle_transition`'s `ToLaptop` branch), which rules out both the sensor
+calibration and the daemon's own process lifecycle as the cause.
+
+Queried Mutter's live state directly instead of guessing further:
+
+```sh
+busctl --user call org.gnome.Mutter.DisplayConfig \
+  /org/gnome/Mutter/DisplayConfig org.gnome.Mutter.DisplayConfig \
+  GetCurrentState
+```
+
+The single logical monitor's `transform` property was `1` (Mutter's enum
+for a 90-degree rotation) instead of `0` (normal), applied on top of
+whatever the kernel's `panel_orientation=right_side_up` correction already
+establishes as "normal" -- confirmed live: the physical unit was resting
+in landscape, `transform` read `1`, and the screen showed portrait.
+Mutter's auto-rotate does not reset this transform back to normal on the
+`SW_TABLET_MODE` 1-to-0 transition; it leaves whatever rotation was last
+live-applied during Tablet mode in place.
+
+Fixed in `daemon/src/display.rs`: `handle_transition`'s `ToLaptop` branch
+now also calls Mutter's `ApplyMonitorsConfig` (method `1`, temporary --
+doesn't rewrite `monitors.xml`) forcing `transform=0`, confirmed via the
+same `GetCurrentState` query to restore the correct landscape orientation.
+
+One complication, also found empirically rather than assumed: the daemon
+runs as root (needed for `/proc/acpi/call` and `/dev/uinput`), but
+Mutter's `DisplayConfig` interface lives on the logged-in user's session
+D-Bus, not root's own. Calling `busctl` directly as root with `--address`
+pointed at the user's session socket (`/run/user/1000/bus`) fails with
+`Call failed: Transport endpoint is not connected` -- the session bus
+authenticates connections by the connecting process's real uid
+(`SO_PEERCRED`) and rejects root outright, regardless of which socket path
+it connects to. Fixed by wrapping the call in `runuser -u <user> --`, so
+`busctl` itself actually runs as the target user rather than as root.
+
+Verified end-to-end via the installed systemd service: a full
+Laptop-to-Tablet-to-Laptop cycle now correctly returns to landscape, with
+no `failed to reset display rotation` line in `journalctl -u minibookd`.
+
+Caveat: `daemon/src/display.rs` hardcodes this unit's single display's
+connector, mode, and scale (consistent with this repo's single-unit
+convention, see `CLAUDE.md`) rather than reading them back live each time.
+If the display scale is changed in GNOME Settings, the next
+Tablet-to-Laptop transition will silently reset it back to `1.25`.
 
 ## Architecture (implemented and validated on real hardware)
 
 This architecture is implemented, in [`daemon/`](daemon/) (the Rust
 daemon) and [`systemd/`](systemd/) (its service unit), and has been
 validated end-to-end on real hardware; see [Status](#status--whats-left)
-and empirical validation finding 7.
+and empirical validation findings 7 and 8.
 
 1. **Second accelerometer**: udev rule triggered off the first accelerometer's
    appearance, instantiating the second via the `new_device` sysfs mechanism
@@ -540,6 +614,11 @@ and empirical validation finding 7.
    state change both calls `acpi_call` (step 2) *and* emits a synthetic
    `SW_TABLET_MODE` via a `/dev/uinput` virtual switch device, purely for
    `iio-sensor-proxy`/GNOME Shell to consume.
+4. **Display-rotation reset**: on the Tablet-to-Laptop transition, also
+   calls Mutter's `ApplyMonitorsConfig` D-Bus method (via `runuser`, since
+   the daemon runs as root but this must run as the logged-in user, see
+   finding 8) to force the screen's rotation transform back to normal,
+   working around a Mutter bug that otherwise leaves it stuck rotated.
 
 Net result: no custom kernel module, no `intel-hid` patching, no evdev
 interception of real keyboard/touchpad input, only a generic, packaged
@@ -555,13 +634,11 @@ ACPI-calling module plus one small daemon owning one virtual switch device.
 - [x] udev rule to auto-instantiate the second accelerometer at boot
       (confirmed on real hardware: `iio:device1` appears after reboot with
       no manual step)
-- [ ] Determine `ACCEL_MOUNT_MATRIX` for each sensor (needed for screen
-      auto-rotation, not for hinge-angle detection). Its absence now has a
-      concrete observed symptom (finding 7): once the daemon signals
-      `SW_TABLET_MODE=0` and GNOME falls back to raw accelerometer
-      orientation, the screen consistently lands in the wrong orientation
-      ("Portrait Right") rather than the correct one, since the raw axes
-      aren't yet mapped onto the panel correctly.
+- [ ] Determine `ACCEL_MOUNT_MATRIX` for each sensor (needed for live
+      auto-rotate's orientation to be accurate while actively held in
+      Tablet mode, not for hinge-angle detection, and not the cause of the
+      Tablet-to-Laptop portrait regression -- that turned out to be an
+      unrelated Mutter bug, see finding 8, now fixed).
 - [x] Write the angle-sensor + `uinput` + `acpi_call` daemon (`daemon/`,
       Rust). It computes hinge angle from the two accelerometers, calls
       `acpi_call` to invoke `LTSM` on a state change, and emits a synthetic
@@ -582,6 +659,13 @@ ACPI-calling module plus one small daemon owning one virtual switch device.
       reading pairs; cause unidentified, doesn't appear to block practical
       classification, and did not surface as a problem during real-hardware
       validation (finding 7).
+- [x] Fix the Tablet-to-Laptop screen-rotation regression (finding 7):
+      root-caused to a Mutter bug, not `ACCEL_MOUNT_MATRIX` as first
+      suspected -- Mutter leaves an explicit rotation transform in place
+      instead of resetting to normal on the `SW_TABLET_MODE` 1-to-0
+      transition. `daemon/src/display.rs` forces it back via Mutter's
+      `ApplyMonitorsConfig`, run as the logged-in user via `runuser` since
+      the daemon itself runs as root. See finding 8.
 
 ## Reproducing / contributing
 
