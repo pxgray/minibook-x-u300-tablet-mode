@@ -4,11 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repository is
 
-Hardware reverse-engineering findings and reproducible test scripts for
-tablet-mode support on the Chuwi MiniBook X (Intel Core i3-U300 variant)
-under Linux/GNOME. This is a findings writeup, not a working daemon yet:
-see `README.md`'s "Status / what's left" section for what's implemented
-versus not.
+A working tablet-mode daemon (`minibookd`, in `daemon/`) for the Chuwi
+MiniBook X (Intel Core i3-U300 variant) under Linux/GNOME, plus the
+hardware reverse-engineering findings and reproducible test scripts it's
+built on. `README.md` covers installing and using the daemon and
+contributing to it; `docs/findings.md` carries the full reverse-engineering
+methodology and evidence.
 
 There is no build, lint, or test framework. The "commands" for this repo
 are the scripts themselves, meant to be run directly on the actual
@@ -58,20 +59,25 @@ All scripts live in `scripts/`:
    findings: the angle computation works from raw accelerometer vectors
    alone and needs no ACPI method calls.
 
-See `README.md` for the full empirical results, the proposed (not yet
-implemented) daemon architecture, and prior art from other MiniBook X
-Linux projects.
+See `docs/findings.md` for the full empirical results and prior art from
+other MiniBook X Linux projects, and `README.md` for the implemented
+daemon architecture (`daemon/`) and how to install and contribute to it.
 
 ## Editorial standards for this repository
 
 This repo's credibility rests on every claim being backed by an actual
-test recorded in `README.md`'s "Empirical validation" section, not by
-analogy or inference presented as fact:
+test recorded in `docs/findings.md`'s "Empirical validation" section, not
+by analogy or inference presented as fact. `README.md` itself is the
+install/usage/contributing doc: it carries only a condensed, numbered
+"Findings" summary that links to `docs/findings.md` for the full
+methodology and evidence.
 
-- Before adding a new factual claim about this hardware to `README.md`,
-  verify it empirically on the actual machine first, or clearly mark it as
-  untested/inherited from another project (as done for the "Windows
-  driver" attribution).
+- Before adding a new factual claim about this hardware to `README.md` or
+  `docs/findings.md`, verify it empirically on the actual machine first,
+  or clearly mark it as untested/inherited from another source (as done
+  in `docs/findings.md`'s Hardware/software baseline for the DSI
+  panel-orientation note, which is carried over from an ArchWiki page for
+  a different, N100, model rather than independently re-derived here).
 - Do not extrapolate a finding from one unit to "other units of the same
   variant" without evidence; state only what was actually observed.
 - No em-dashes in prose. This is a standing style preference for this
