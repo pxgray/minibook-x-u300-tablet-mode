@@ -16,7 +16,11 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const POLL_INTERVAL: Duration = Duration::from_millis(100);
+const FAST_POLL_INTERVAL: Duration = Duration::from_millis(100);
+// Stays comfortably under WATCHDOG_TIMEOUT / 2 (2.5s) so normal
+// steady-state slow polling never itself looks like a hang to the
+// watchdog thread in watchdog.rs.
+const SLOW_POLL_INTERVAL: Duration = Duration::from_millis(400);
 // Fraction of magnitude per second; tune during real --dry-run testing.
 // Dimensionless so it applies evenly across sensors with different raw
 // counts-per-g (see the jerk computation in the poll loop below).
@@ -178,13 +182,14 @@ fn main() -> ExitCode {
         }
     };
 
+    let mut poll_interval = FAST_POLL_INTERVAL;
     let mut last_display_mag: Option<f64> = None;
     let mut last_base_mag: Option<f64> = None;
     let mut held_angle: Option<f64> = None;
     let mut last_tick = Instant::now();
 
     loop {
-        std::thread::sleep(POLL_INTERVAL);
+        std::thread::sleep(poll_interval);
         let now = Instant::now();
         let dt_secs = now.duration_since(last_tick).as_secs_f64();
         last_tick = now;
@@ -269,6 +274,13 @@ fn main() -> ExitCode {
         }
 
         watchdog.heartbeat();
+
+        let sm = lock_state(&state_machine);
+        poll_interval = next_poll_interval(
+            jerked,
+            state::near_boundary(angle_deg, sm.current()),
+            sm.has_pending_candidate(),
+        );
     }
 }
 
@@ -282,6 +294,27 @@ fn lock_state(state_machine: &Mutex<state::StateMachine>) -> std::sync::MutexGua
     state_machine
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Whether the poll loop's next sleep should use FAST_POLL_INTERVAL:
+/// `jerked` is this tick's jerk-threshold result, `near_boundary` is
+/// state::near_boundary evaluated against this tick's angle and the
+/// state machine's current state, and `pending_candidate` is the state
+/// machine's has_pending_candidate(). Each is an independent reason a
+/// slower steady-state cadence would blunt responsiveness right when it
+/// matters: a sudden jerk (a fold in progress), a reading close enough to
+/// a threshold to cross it on the next tick, or a candidate transition
+/// already mid-debounce. A transient accelerometer read error or
+/// degenerate-angle tick (both `continue` before reaching this
+/// function's caller) leaves the previous tick's interval in place
+/// rather than forcing a recomputation, which is intentional: those are
+/// rare and don't need a special cadence of their own.
+fn next_poll_interval(jerked: bool, near_boundary: bool, pending_candidate: bool) -> Duration {
+    if jerked || near_boundary || pending_candidate {
+        FAST_POLL_INTERVAL
+    } else {
+        SLOW_POLL_INTERVAL
+    }
 }
 
 fn handle_transition(
@@ -463,5 +496,25 @@ mod tests {
     fn does_not_reset_display_when_target_is_tablet() {
         assert!(!needs_display_reset(Some(HingeState::Laptop), HingeState::Tablet));
         assert!(!needs_display_reset(None, HingeState::Tablet));
+    }
+
+    #[test]
+    fn polls_fast_when_jerked() {
+        assert_eq!(next_poll_interval(true, false, false), FAST_POLL_INTERVAL);
+    }
+
+    #[test]
+    fn polls_fast_when_near_boundary() {
+        assert_eq!(next_poll_interval(false, true, false), FAST_POLL_INTERVAL);
+    }
+
+    #[test]
+    fn polls_fast_when_candidate_pending() {
+        assert_eq!(next_poll_interval(false, false, true), FAST_POLL_INTERVAL);
+    }
+
+    #[test]
+    fn polls_slow_when_stable() {
+        assert_eq!(next_poll_interval(false, false, false), SLOW_POLL_INTERVAL);
     }
 }
