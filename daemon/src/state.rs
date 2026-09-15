@@ -43,6 +43,13 @@ pub const LAPTOP_ENTER_HIGH: f64 = 138.0;
 pub const BASE_TILT_THRESHOLD: f64 = 8.0;
 /// A candidate state must persist this long before it's confirmed.
 pub const DEBOUNCE: Duration = Duration::from_millis(750);
+/// Margin (degrees) within which the poll loop in main.rs should keep
+/// polling at its fast interval even though the angle hasn't crossed a
+/// threshold yet, so a fold in progress is never a poll tick away from a
+/// slow-polling daemon before the daemon notices it started moving. Not
+/// itself a state-machine threshold; consumed only by near_boundary
+/// below, not by zone_for.
+pub const NEAR_THRESHOLD_MARGIN_DEG: f64 = 10.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HingeState {
@@ -54,6 +61,25 @@ pub enum HingeState {
 pub enum Transition {
     ToLaptop,
     ToTablet,
+}
+
+/// Whether `angle_deg` sits within NEAR_THRESHOLD_MARGIN_DEG of any zone
+/// boundary actually reachable from `current` -- mirrors zone_for's own
+/// per-state boundary set, not every threshold constant in this module.
+/// Used by main.rs's adaptive polling decision: a reading merely close to
+/// flipping zones deserves the same poll responsiveness as one already
+/// mid-debounce.
+pub fn near_boundary(angle_deg: f64, current: HingeState) -> bool {
+    match current {
+        HingeState::Laptop => {
+            (angle_deg - TABLET_ENTER_LOW).abs() < NEAR_THRESHOLD_MARGIN_DEG
+                || (angle_deg - TABLET_ENTER_HIGH).abs() < NEAR_THRESHOLD_MARGIN_DEG
+        }
+        HingeState::Tablet => {
+            (angle_deg - LAPTOP_ENTER_LOW).abs() < NEAR_THRESHOLD_MARGIN_DEG
+                || (angle_deg - LAPTOP_ENTER_HIGH).abs() < NEAR_THRESHOLD_MARGIN_DEG
+        }
+    }
 }
 
 pub struct StateMachine {
@@ -76,6 +102,15 @@ impl StateMachine {
 
     pub fn current(&self) -> HingeState {
         self.current
+    }
+
+    /// Whether a candidate transition is currently pending confirmation
+    /// (mid-debounce). Used by main.rs's adaptive polling decision so a
+    /// reading that already crossed a threshold and is waiting out
+    /// DEBOUNCE keeps polling fast until it either confirms or reverts,
+    /// rather than backing off mid-debounce.
+    pub fn has_pending_candidate(&self) -> bool {
+        self.candidate.is_some()
     }
 
     pub fn from_state(current: HingeState) -> Self {
@@ -424,5 +459,66 @@ mod tests {
                 "angle {angle} (tilt {tilt}) should classify as Tablet"
             );
         }
+    }
+
+    #[test]
+    fn near_boundary_true_just_inside_margin_of_low_side_tablet_entry_from_laptop() {
+        // TABLET_ENTER_LOW is 20.0; 25.0 is 5 degrees away, inside the
+        // 10-degree margin.
+        assert!(near_boundary(25.0, HingeState::Laptop));
+    }
+
+    #[test]
+    fn near_boundary_false_well_inside_laptop_zone() {
+        // 70 degrees sits nowhere near either Laptop-zone boundary (20 or
+        // 146).
+        assert!(!near_boundary(70.0, HingeState::Laptop));
+    }
+
+    #[test]
+    fn near_boundary_true_near_high_side_tablet_entry_from_laptop() {
+        // TABLET_ENTER_HIGH is 146.0; 140.0 is 6 degrees away, inside the
+        // margin.
+        assert!(near_boundary(140.0, HingeState::Laptop));
+    }
+
+    #[test]
+    fn near_boundary_true_near_laptop_entry_from_tablet() {
+        // LAPTOP_ENTER_LOW is 35.0; 40.0 is 5 degrees away, inside the
+        // margin.
+        assert!(near_boundary(40.0, HingeState::Tablet));
+    }
+
+    #[test]
+    fn near_boundary_false_well_inside_tablet_zone() {
+        // 90 degrees from Tablet is nowhere near LAPTOP_ENTER_LOW (35) or
+        // LAPTOP_ENTER_HIGH (138).
+        assert!(!near_boundary(90.0, HingeState::Tablet));
+    }
+
+    #[test]
+    fn has_pending_candidate_false_initially() {
+        let sm = StateMachine::new();
+        assert!(!sm.has_pending_candidate());
+    }
+
+    #[test]
+    fn has_pending_candidate_true_mid_debounce() {
+        let mut sm = StateMachine::new();
+        let t0 = Instant::now();
+        // Crosses TABLET_ENTER_LOW with sufficient tilt: starts a
+        // candidate, same reading used elsewhere in this file's debounce
+        // tests.
+        sm.update(10.0, 20.0, t0);
+        assert!(sm.has_pending_candidate());
+    }
+
+    #[test]
+    fn has_pending_candidate_false_after_confirmed() {
+        let mut sm = StateMachine::new();
+        let t0 = Instant::now();
+        sm.update(10.0, 20.0, t0);
+        sm.update(10.0, 20.0, t0 + Duration::from_millis(800));
+        assert!(!sm.has_pending_candidate());
     }
 }
