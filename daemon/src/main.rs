@@ -163,6 +163,21 @@ fn main() -> ExitCode {
         });
     }
 
+    let mut display_reader = match accel::AccelReader::open(&opts.display_accel) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("minibookd: failed to open display accelerometer: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut base_reader = match accel::AccelReader::open(&opts.base_accel) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("minibookd: failed to open base accelerometer: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
     let mut last_display_mag: Option<f64> = None;
     let mut last_base_mag: Option<f64> = None;
     let mut held_angle: Option<f64> = None;
@@ -174,7 +189,7 @@ fn main() -> ExitCode {
         let dt_secs = now.duration_since(last_tick).as_secs_f64();
         last_tick = now;
 
-        let display = match accel::read_vector(&opts.display_accel) {
+        let display = match display_reader.read() {
             Ok(v) => v,
             Err(e) => {
                 eprintln!("minibookd: failed to read display accelerometer: {e}");
@@ -185,7 +200,7 @@ fn main() -> ExitCode {
                 continue;
             }
         };
-        let base = match accel::read_vector(&opts.base_accel) {
+        let base = match base_reader.read() {
             Ok(v) => v,
             Err(e) => {
                 eprintln!("minibookd: failed to read base accelerometer: {e}");
