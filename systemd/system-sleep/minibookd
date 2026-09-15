@@ -1,0 +1,26 @@
+#!/bin/sh
+# systemd-sleep drop-in: re-reads the hinge angle and reconciles hardware
+# (LTSM + SW_TABLET_MODE) to it after resuming from suspend/hibernate.
+#
+# minibookd has no suspend/resume awareness of its own -- its poll loop and
+# watchdog both use a monotonic clock that doesn't advance across suspend,
+# so nothing in the running process ever notices a resume happened. This
+# script's whole job is to poke it: send SIGUSR1 on "post", which makes the
+# daemon re-run its reconcile() startup routine (see main.rs) instead of
+# trusting whatever state it believed going into suspend.
+#
+# Install: copy or symlink to /usr/lib/systemd/system-sleep/minibookd,
+# owned by root, mode 755. systemd runs everything in this directory
+# automatically; no separate enablement step.
+#
+# See: man 8 systemd-suspend.service, "system-sleep" section.
+
+set -eu
+
+case "$1" in
+    post)
+        # Best-effort: if the service isn't running (disabled, or this
+        # unit doesn't have it installed), there's nothing to reconcile.
+        systemctl kill -s SIGUSR1 minibookd.service || true
+        ;;
+esac

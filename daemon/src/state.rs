@@ -62,6 +62,11 @@ pub struct StateMachine {
 }
 
 impl StateMachine {
+    /// Equivalent to `from_state(HingeState::Laptop)`. No longer called by
+    /// `main` (which now seeds via `reconcile()` + `from_state` instead of
+    /// assuming Laptop), but kept as the default constructor tests use
+    /// throughout this module.
+    #[allow(dead_code)]
     pub fn new() -> Self {
         StateMachine {
             current: HingeState::Laptop,
@@ -71,6 +76,23 @@ impl StateMachine {
 
     pub fn current(&self) -> HingeState {
         self.current
+    }
+
+    pub fn from_state(current: HingeState) -> Self {
+        StateMachine {
+            current,
+            candidate: None,
+        }
+    }
+
+    /// Stateless one-shot classification, for reconciling to hardware
+    /// without a prior state to hysterese against (daemon startup, or
+    /// after resuming from suspend). Resolves the same dead bands
+    /// `zone_for` uses for its continuous, debounced classification by
+    /// assuming Laptop as the neutral prior -- the same conservative
+    /// default a fresh `StateMachine` already starts from.
+    pub fn classify(angle_deg: f64, base_tilt_deg: f64) -> HingeState {
+        Self::zone_for(angle_deg, base_tilt_deg, HingeState::Laptop)
     }
 
     fn zone_for(angle_deg: f64, base_tilt_deg: f64, current: HingeState) -> HingeState {
@@ -130,6 +152,55 @@ mod tests {
     fn starts_in_laptop_state() {
         let sm = StateMachine::new();
         assert_eq!(sm.current(), HingeState::Laptop);
+    }
+
+    #[test]
+    fn classify_reports_laptop_for_a_clear_laptop_angle() {
+        // 70 degrees, no tilt: comfortably inside the Laptop zone,
+        // mirrors no_transition_while_reading_stays_in_laptop_zone above.
+        assert_eq!(StateMachine::classify(70.0, 0.0), HingeState::Laptop);
+    }
+
+    #[test]
+    fn classify_reports_tablet_for_a_clear_low_side_fold_with_tilt() {
+        // 10 degrees with 20 degrees of tilt: clears TABLET_ENTER_LOW and
+        // BASE_TILT_THRESHOLD, same reading used in
+        // folding_past_low_threshold_with_sufficient_tilt_and_holding_debounce_confirms_tablet.
+        assert_eq!(StateMachine::classify(10.0, 20.0), HingeState::Tablet);
+    }
+
+    #[test]
+    fn classify_reports_laptop_for_a_low_side_fold_without_sufficient_tilt() {
+        // The "almost closed lid, resting normally" false-positive case:
+        // low angle, but tilt stays under BASE_TILT_THRESHOLD.
+        assert_eq!(StateMachine::classify(-39.9, 0.75), HingeState::Laptop);
+    }
+
+    #[test]
+    fn classify_reports_tablet_for_a_clear_high_side_fold() {
+        // 155 degrees, ungated by tilt on the high side.
+        assert_eq!(StateMachine::classify(155.0, 0.0), HingeState::Tablet);
+    }
+
+    #[test]
+    fn classify_resolves_dead_bands_as_laptop() {
+        // Both dead bands (20..35 low side, 138..146 high side) are
+        // ambiguous by construction; a one-shot classification with no
+        // prior state to hysterese against must resolve them the same
+        // conservative way a fresh StateMachine does: Laptop.
+        assert_eq!(StateMachine::classify(27.0, 20.0), HingeState::Laptop);
+        assert_eq!(StateMachine::classify(142.0, 0.0), HingeState::Laptop);
+    }
+
+    #[test]
+    fn from_state_seeds_current_without_requiring_debounce() {
+        let mut sm = StateMachine::from_state(HingeState::Tablet);
+        assert_eq!(sm.current(), HingeState::Tablet);
+        // No stale candidate carried over: a reading squarely in the
+        // Tablet zone must not register as a pending transition.
+        let t0 = Instant::now();
+        assert_eq!(sm.update(155.0, 0.0, t0), None);
+        assert_eq!(sm.current(), HingeState::Tablet);
     }
 
     #[test]
@@ -304,6 +375,51 @@ mod tests {
             sm.update(angle, tilt, t0 + DEBOUNCE + Duration::from_millis(50));
             assert_eq!(
                 sm.current(),
+                HingeState::Tablet,
+                "angle {angle} (tilt {tilt}) should classify as Tablet"
+            );
+        }
+    }
+
+    // Same 18 real readings as real_readings_classify_correctly, but
+    // checked against the stateless one-shot classify() that reconcile()
+    // will actually call on real hardware at startup/resume -- no
+    // debounce, no prior state.
+    #[test]
+    fn classify_matches_real_readings() {
+        let expect_laptop = [
+            (57.98, 0.48),
+            (110.43, 0.74),
+            (84.60, 0.38),
+            (51.75, 39.23),
+            (65.17, 14.62),
+            (45.10, 20.47),
+            (46.36, 3.87),
+            (53.44, 49.60),
+            (67.28, 3.49),
+            (69.87, 26.13),
+            (56.79, 45.48),
+            (50.01, 11.01),
+            (45.82, 34.09),
+            (53.11, 55.94),
+        ];
+        let expect_tablet = [
+            (-70.42, 179.65),
+            (149.02, 18.36),
+            (-124.31, 62.55),
+            (-144.14, 178.84),
+        ];
+
+        for (angle, tilt) in expect_laptop {
+            assert_eq!(
+                StateMachine::classify(angle, tilt),
+                HingeState::Laptop,
+                "angle {angle} (tilt {tilt}) should classify as Laptop"
+            );
+        }
+        for (angle, tilt) in expect_tablet {
+            assert_eq!(
+                StateMachine::classify(angle, tilt),
                 HingeState::Tablet,
                 "angle {angle} (tilt {tilt}) should classify as Tablet"
             );

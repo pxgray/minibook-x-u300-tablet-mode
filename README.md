@@ -57,7 +57,20 @@ The unit's `ExecStopPost` runs `minibookd --revert-only`, so stopping the
 service also reverts `LTSM` back to Laptop mode rather than leaving the
 keyboard/touchpad disabled.
 
-**4. Verify:** fold the hinge into a Tablet-range position (see the
+**4. Install the suspend/resume hook:**
+
+```sh
+sudo install -Dm755 systemd/system-sleep/minibookd /usr/lib/systemd/system-sleep/minibookd
+```
+
+The daemon has no suspend/resume awareness on its own; this hook sends it
+`SIGUSR1` on resume so it re-reads the hinge angle and reconciles hardware
+to it, in case the EC reset any state independently of the daemon across
+suspend. No separate enablement step; systemd runs everything under
+`/usr/lib/systemd/system-sleep/` automatically. **Not yet validated
+against a real suspend/resume cycle** -- see Status below.
+
+**5. Verify:** fold the hinge into a Tablet-range position (see the
 Laptop/Tablet ranges in empirical validation finding 5) and confirm the
 keyboard/touchpad disable and check `journalctl -u minibookd` for the
 transition log line.
@@ -659,6 +672,18 @@ ACPI-calling module plus one small daemon owning one virtual switch device.
       transition. `daemon/src/display.rs` forces it back via Mutter's
       `ApplyMonitorsConfig`, run as the logged-in user via `runuser` since
       the daemon itself runs as root. See finding 8.
+- [ ] Suspend/resume handling: `daemon`'s poll loop and watchdog both use a
+      monotonic clock that doesn't advance across suspend, so a resume was
+      never observed on its own. Added `reconcile()` (re-reads the hinge
+      angle and reapplies hardware state instead of assuming Laptop),
+      called at startup and on `SIGUSR1`, plus a
+      `systemd/system-sleep/minibookd` hook that sends that signal on
+      resume. Motivated by an **unverified hypothesis**, not an observed
+      bug: that the EC might reset its keyboard-disable register (`KBCD`)
+      across suspend independently of the daemon. 44/44 unit tests pass
+      and `--dry-run` correctly classifies live hardware, but this has not
+      yet been exercised through an actual suspend/resume cycle on real
+      hardware.
 
 ## Reproducing / contributing
 

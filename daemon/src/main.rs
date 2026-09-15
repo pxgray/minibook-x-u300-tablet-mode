@@ -7,9 +7,13 @@ mod state;
 mod uinput;
 mod watchdog;
 
-use state::Transition;
+use signal_hook::consts::SIGUSR1;
+use signal_hook::iterator::Signals;
+use state::{HingeState, Transition};
+use std::io;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::{Duration, Instant};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -40,7 +44,7 @@ fn main() -> ExitCode {
     }
 
     let opts = match cli::parse(&args) {
-        Ok(opts) => opts,
+        Ok(opts) => Arc::new(opts),
         Err(e) => {
             eprintln!("minibookd: {e}");
             return ExitCode::FAILURE;
@@ -81,28 +85,17 @@ fn main() -> ExitCode {
     // addresses.
     let uinput_switch = Arc::new(Mutex::new(uinput_switch));
 
-    // Startup reconciliation: the daemon always begins its own bookkeeping
-    // in Laptop state and only acts on a *transition*, but a prior unclean
-    // exit (a crash between LTSM(1) and reverting, or a manual test script
-    // whose revert didn't fire) can leave the EC's keyboard-disable
-    // register set and GNOME's last-known switch state stale even though
-    // this fresh process's state machine has never observed a transition.
-    // Unconditionally reconcile to known-good Laptop state here, once, up
-    // front, regardless of what the state machine believes. Best-effort:
-    // log failures but don't treat them as fatal, unlike the safety-critical
-    // ToLaptop transition handler below.
-    if opts.dry_run {
-        println!("minibookd: [dry-run] would perform startup reconciliation to Laptop state (LTSM(0), SW_TABLET_MODE=0)");
-    } else {
-        if let Err(e) = acpi::set_tablet_mode(&opts.acpi_path, false) {
-            eprintln!("minibookd: startup reconciliation LTSM(0) failed: {e}");
-        }
-        if let Some(sw) = lock_switch(&uinput_switch).as_mut() {
-            if let Err(e) = sw.set(false) {
-                eprintln!("minibookd: startup reconciliation uinput set failed: {e}");
-            }
-        }
-    }
+    // Startup reconciliation: a prior unclean exit (a crash between LTSM(1)
+    // and reverting, or a manual test script whose revert didn't fire), or
+    // simply never having run before, can leave the EC's keyboard-disable
+    // register and GNOME's last-known switch state out of sync with the
+    // unit's actual physical orientation. reconcile() re-reads the current
+    // hinge angle and forces hardware to match it, rather than assuming
+    // Laptop outright -- a unit that happens to boot already folded closed
+    // should come up in Tablet, not have its keyboard force-enabled while
+    // folded shut.
+    let initial_state = reconcile(&opts, &uinput_switch);
+    let state_machine = Arc::new(Mutex::new(state::StateMachine::from_state(initial_state)));
 
     let watchdog = watchdog::Watchdog::new();
     if !opts.dry_run {
@@ -146,9 +139,29 @@ fn main() -> ExitCode {
             std::process::exit(if acpi_result.is_ok() { 0 } else { 1 });
         })
         .expect("failed to install signal handler");
+
+        // No suspend/resume awareness exists otherwise: the poll loop and
+        // watchdog both use Instant, which does not advance across
+        // suspend, so nothing here would ever notice a resume on its own.
+        // A systemd-sleep drop-in script (see systemd/system-sleep/) sends
+        // SIGUSR1 on post-resume; re-running reconcile() re-reads the
+        // actual hinge angle rather than trusting whatever the state
+        // machine last believed, in case the EC reset its keyboard-disable
+        // register across suspend independently of the daemon.
+        let mut signals =
+            Signals::new([SIGUSR1]).expect("failed to install SIGUSR1 handler");
+        let opts_for_signal = Arc::clone(&opts);
+        let sw = Arc::clone(&uinput_switch);
+        let sm = Arc::clone(&state_machine);
+        thread::spawn(move || {
+            for _ in signals.forever() {
+                eprintln!("minibookd: caught SIGUSR1 (resume), reconciling to current hinge angle");
+                let target = reconcile(&opts_for_signal, &sw);
+                *lock_state(&sm) = state::StateMachine::from_state(target);
+            }
+        });
     }
 
-    let mut state_machine = state::StateMachine::new();
     let mut last_display_mag: Option<f64> = None;
     let mut last_base_mag: Option<f64> = None;
     let mut held_angle: Option<f64> = None;
@@ -227,14 +240,15 @@ fn main() -> ExitCode {
         // state::BASE_TILT_THRESHOLD and angle::base_tilt_from_level.
         let base_tilt_deg = angle::base_tilt_from_level(base);
 
-        if let Some(transition) = state_machine.update(angle_deg, base_tilt_deg, now) {
+        let transition = lock_state(&state_machine).update(angle_deg, base_tilt_deg, now);
+        if let Some(transition) = transition {
             handle_transition(transition, &opts, &uinput_switch);
         }
 
         if opts.dry_run {
             println!(
                 "minibookd: [dry-run] angle={angle_deg:.1} tilt={base_tilt_deg:.1} state={:?}",
-                state_machine.current()
+                lock_state(&state_machine).current()
             );
         }
 
@@ -248,37 +262,63 @@ fn lock_switch(
     switch.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+fn lock_state(state_machine: &Mutex<state::StateMachine>) -> std::sync::MutexGuard<'_, state::StateMachine> {
+    state_machine
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 fn handle_transition(
     transition: Transition,
     opts: &cli::Cli,
     uinput_switch: &Mutex<Option<uinput::TabletSwitch>>,
 ) {
-    let entering_tablet = matches!(transition, Transition::ToTablet);
+    let target = match transition {
+        Transition::ToTablet => HingeState::Tablet,
+        Transition::ToLaptop => HingeState::Laptop,
+    };
 
     if opts.dry_run {
         println!(
             "minibookd: [dry-run] would transition to {}",
-            if entering_tablet { "Tablet" } else { "Laptop" }
+            if target == HingeState::Tablet { "Tablet" } else { "Laptop" }
         );
         return;
     }
 
-    if entering_tablet {
-        if let Some(sw) = lock_switch(uinput_switch).as_mut() {
-            if let Err(e) = sw.set(true) {
-                eprintln!("minibookd: failed to set uinput switch: {e}");
-            }
-        }
-        if let Err(e) = acpi::set_tablet_mode(&opts.acpi_path, true) {
-            eprintln!("minibookd: LTSM(1) failed: {e}");
-        }
-    } else {
-        if let Err(e) = acpi::set_tablet_mode(&opts.acpi_path, false) {
+    if let Err(e) = apply_state(target, opts, uinput_switch) {
+        if target == HingeState::Laptop {
             eprintln!(
                 "minibookd: LTSM(0) failed, exiting so systemd's ExecStopPost can retry the revert: {e}"
             );
             std::process::exit(1);
         }
+    }
+}
+
+/// Writes `target` to hardware (LTSM + uinput switch), unconditionally --
+/// callers decide whether dry-run should skip calling this at all, and
+/// whether a failure is fatal. Shared by `handle_transition` (the debounced
+/// live-poll path) and `reconcile` (the one-shot startup/resume path) so
+/// the actual ACPI/uinput/display-reset calls exist in exactly one place.
+fn apply_state(
+    target: HingeState,
+    opts: &cli::Cli,
+    uinput_switch: &Mutex<Option<uinput::TabletSwitch>>,
+) -> io::Result<()> {
+    if target == HingeState::Tablet {
+        if let Some(sw) = lock_switch(uinput_switch).as_mut() {
+            if let Err(e) = sw.set(true) {
+                eprintln!("minibookd: failed to set uinput switch: {e}");
+            }
+        }
+        let result = acpi::set_tablet_mode(&opts.acpi_path, true);
+        if let Err(e) = &result {
+            eprintln!("minibookd: LTSM(1) failed: {e}");
+        }
+        result.map(|_| ())
+    } else {
+        let result = acpi::set_tablet_mode(&opts.acpi_path, false);
         if let Some(sw) = lock_switch(uinput_switch).as_mut() {
             if let Err(e) = sw.set(false) {
                 eprintln!("minibookd: failed to set uinput switch: {e}");
@@ -288,10 +328,65 @@ fn handle_transition(
         // 90-degree rotation in place after this transition instead of
         // resetting to the panel_orientation-corrected landscape default
         // (see README's Empirical validation section). Not
-        // safety-critical like the reverts above, so a failure here is
-        // logged but doesn't change the transition's outcome.
+        // safety-critical like the LTSM(0) revert above, so a failure here
+        // is logged but doesn't change the outcome.
         if let Err(e) = display::reset_rotation() {
             eprintln!("minibookd: failed to reset display rotation: {e}");
         }
+        result.map(|_| ())
     }
+}
+
+/// Re-reads both accelerometers and classifies the unit's actual current
+/// orientation, defaulting to Laptop on any read failure or a degenerate
+/// angle -- the same fail-safe direction the watchdog and `--revert-only`
+/// already use.
+fn classify_current_orientation(opts: &cli::Cli) -> HingeState {
+    let display = accel::read_vector(&opts.display_accel);
+    let base = accel::read_vector(&opts.base_accel);
+    match (display, base) {
+        (Ok(display), Ok(base)) => match angle::signed_hinge_angle(base, display) {
+            Some(angle_deg) => {
+                let tilt_deg = angle::base_tilt_from_level(base);
+                state::StateMachine::classify(angle_deg, tilt_deg)
+            }
+            None => {
+                eprintln!("minibookd: reconcile: degenerate hinge angle, defaulting to Laptop");
+                HingeState::Laptop
+            }
+        },
+        (display, base) => {
+            if let Err(e) = &display {
+                eprintln!("minibookd: reconcile: failed to read display accelerometer: {e}");
+            }
+            if let Err(e) = &base {
+                eprintln!("minibookd: reconcile: failed to read base accelerometer: {e}");
+            }
+            eprintln!("minibookd: reconcile: defaulting to Laptop");
+            HingeState::Laptop
+        }
+    }
+}
+
+/// Reconciles hardware to the unit's actual current orientation. Used both
+/// at process startup (replacing the old hardcoded "always force Laptop")
+/// and on resume from suspend (see the SIGUSR1 handler in `main`), since a
+/// unit can be physically folded into Tablet shape in either case. Returns
+/// the classified state so the caller can (re)seed the running
+/// `StateMachine` to match what was just written to hardware.
+///
+/// Best-effort like the old startup reconciliation, not fatal like
+/// `handle_transition`'s live ToLaptop path: a transient ACPI failure here
+/// shouldn't crash-loop the whole daemon before its main loop ever starts,
+/// or kill it mid-run over a resume-time hiccup.
+fn reconcile(opts: &cli::Cli, uinput_switch: &Mutex<Option<uinput::TabletSwitch>>) -> HingeState {
+    let target = classify_current_orientation(opts);
+
+    if opts.dry_run {
+        println!("minibookd: [dry-run] reconcile: would apply {target:?}");
+    } else if let Err(e) = apply_state(target, opts, uinput_switch) {
+        eprintln!("minibookd: reconcile: failed to apply {target:?}: {e}");
+    }
+
+    target
 }
