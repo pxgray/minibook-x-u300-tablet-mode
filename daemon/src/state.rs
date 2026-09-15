@@ -89,7 +89,7 @@ impl StateMachine {
     /// without a prior state to hysterese against (daemon startup, or
     /// after resuming from suspend). Resolves the same dead bands
     /// `zone_for` uses for its continuous, debounced classification by
-    /// assuming Laptop as the neutral prior -- the same conservative
+    /// assuming Laptop as the neutral prior, the same conservative
     /// default a fresh `StateMachine` already starts from.
     pub fn classify(angle_deg: f64, base_tilt_deg: f64) -> HingeState {
         Self::zone_for(angle_deg, base_tilt_deg, HingeState::Laptop)
@@ -383,7 +383,7 @@ mod tests {
 
     // Same 18 real readings as real_readings_classify_correctly, but
     // checked against the stateless one-shot classify() that reconcile()
-    // will actually call on real hardware at startup/resume -- no
+    // will actually call on real hardware at startup/resume: no
     // debounce, no prior state.
     #[test]
     fn classify_matches_real_readings() {

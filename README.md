@@ -680,7 +680,7 @@ ACPI-calling module plus one small daemon owning one virtual switch device.
       `systemd/system-sleep/minibookd` hook that sends that signal on
       resume. Motivated by an **unverified hypothesis**, not an observed
       bug: that the EC might reset its keyboard-disable register (`KBCD`)
-      across suspend independently of the daemon -- that specific
+      across suspend independently of the daemon; that specific
       hypothesis remains untested (no confirmed case of it happening
       either way). **The hook mechanism itself is confirmed working** on
       real hardware: a real suspend/resume cycle shows `systemd` delivering

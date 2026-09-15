@@ -2,7 +2,7 @@
 # systemd-sleep drop-in: re-reads the hinge angle and reconciles hardware
 # (LTSM + SW_TABLET_MODE) to it after resuming from suspend/hibernate.
 #
-# minibookd has no suspend/resume awareness of its own -- its poll loop and
+# minibookd has no suspend/resume awareness of its own: its poll loop and
 # watchdog both use a monotonic clock that doesn't advance across suspend,
 # so nothing in the running process ever notices a resume happened. This
 # script's whole job is to poke it: send SIGUSR1 on "post", which makes the

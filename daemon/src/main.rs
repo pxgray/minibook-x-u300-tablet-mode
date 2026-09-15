@@ -91,7 +91,7 @@ fn main() -> ExitCode {
     // register and GNOME's last-known switch state out of sync with the
     // unit's actual physical orientation. reconcile() re-reads the current
     // hinge angle and forces hardware to match it, rather than assuming
-    // Laptop outright -- a unit that happens to boot already folded closed
+    // Laptop outright: a unit that happens to boot already folded closed
     // should come up in Tablet, not have its keyboard force-enabled while
     // folded shut.
     let initial_state = reconcile(&opts, &uinput_switch);
@@ -296,7 +296,7 @@ fn handle_transition(
     }
 }
 
-/// Writes `target` to hardware (LTSM + uinput switch), unconditionally --
+/// Writes `target` to hardware (LTSM + uinput switch) unconditionally;
 /// callers decide whether dry-run should skip calling this at all, and
 /// whether a failure is fatal. Shared by `handle_transition` (the debounced
 /// live-poll path) and `reconcile` (the one-shot startup/resume path) so
@@ -339,7 +339,7 @@ fn apply_state(
 
 /// Re-reads both accelerometers and classifies the unit's actual current
 /// orientation, defaulting to Laptop on any read failure or a degenerate
-/// angle -- the same fail-safe direction the watchdog and `--revert-only`
+/// angle, the same fail-safe direction the watchdog and `--revert-only`
 /// already use.
 fn classify_current_orientation(opts: &cli::Cli) -> HingeState {
     let display = accel::read_vector(&opts.display_accel);
