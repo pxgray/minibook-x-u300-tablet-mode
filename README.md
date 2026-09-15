@@ -67,8 +67,8 @@ The daemon has no suspend/resume awareness on its own; this hook sends it
 `SIGUSR1` on resume so it re-reads the hinge angle and reconciles hardware
 to it, in case the EC reset any state independently of the daemon across
 suspend. No separate enablement step; systemd runs everything under
-`/usr/lib/systemd/system-sleep/` automatically. **Not yet validated
-against a real suspend/resume cycle** -- see Status below.
+`/usr/lib/systemd/system-sleep/` automatically. Confirmed working on
+real hardware (see Status below).
 
 **5. Verify:** fold the hinge into a Tablet-range position (see the
 Laptop/Tablet ranges in empirical validation finding 5) and confirm the
@@ -672,7 +672,7 @@ ACPI-calling module plus one small daemon owning one virtual switch device.
       transition. `daemon/src/display.rs` forces it back via Mutter's
       `ApplyMonitorsConfig`, run as the logged-in user via `runuser` since
       the daemon itself runs as root. See finding 8.
-- [ ] Suspend/resume handling: `daemon`'s poll loop and watchdog both use a
+- [x] Suspend/resume handling: `daemon`'s poll loop and watchdog both use a
       monotonic clock that doesn't advance across suspend, so a resume was
       never observed on its own. Added `reconcile()` (re-reads the hinge
       angle and reapplies hardware state instead of assuming Laptop),
@@ -680,10 +680,13 @@ ACPI-calling module plus one small daemon owning one virtual switch device.
       `systemd/system-sleep/minibookd` hook that sends that signal on
       resume. Motivated by an **unverified hypothesis**, not an observed
       bug: that the EC might reset its keyboard-disable register (`KBCD`)
-      across suspend independently of the daemon. 44/44 unit tests pass
-      and `--dry-run` correctly classifies live hardware, but this has not
-      yet been exercised through an actual suspend/resume cycle on real
-      hardware.
+      across suspend independently of the daemon -- that specific
+      hypothesis remains untested (no confirmed case of it happening
+      either way). **The hook mechanism itself is confirmed working** on
+      real hardware: a real suspend/resume cycle shows `systemd` delivering
+      `SIGUSR1` and the daemon logging `caught SIGUSR1 (resume),
+      reconciling to current hinge angle` in `journalctl -u minibookd`,
+      with the service remaining active and no errors afterward.
 
 ## Reproducing / contributing
 
