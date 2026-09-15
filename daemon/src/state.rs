@@ -45,11 +45,18 @@ pub const BASE_TILT_THRESHOLD: f64 = 8.0;
 pub const DEBOUNCE: Duration = Duration::from_millis(750);
 /// Margin (degrees) within which the poll loop in main.rs should keep
 /// polling at its fast interval even though the angle hasn't crossed a
-/// threshold yet, so a fold in progress is never a poll tick away from a
-/// slow-polling daemon before the daemon notices it started moving. Not
-/// itself a state-machine threshold; consumed only by near_boundary
-/// below, not by zone_for.
-pub const NEAR_THRESHOLD_MARGIN_DEG: f64 = 10.0;
+/// threshold yet, so a reading that's merely close to a boundary -- or
+/// resting there, like the hand_held_tent calibration reading at 149.02
+/// degrees (11.02 degrees from LAPTOP_ENTER_HIGH, see angle.rs's
+/// cross-validated test data) -- gets fast polling before or during its
+/// approach. This margin is not a guarantee against ever missing a fast
+/// fold: a brisk fold covers tens of degrees within a single poll tick
+/// regardless of margin width, so the actual safety net for a fast fold
+/// is the crossing tick itself (which always forces fast polling on its
+/// own, since it flips the state machine's target zone) plus DEBOUNCE,
+/// not this margin. Not itself a state-machine threshold; consumed only
+/// by near_boundary below, not by zone_for.
+pub const NEAR_THRESHOLD_MARGIN_DEG: f64 = 15.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HingeState {
@@ -494,6 +501,16 @@ mod tests {
         // 90 degrees from Tablet is nowhere near LAPTOP_ENTER_LOW (35) or
         // LAPTOP_ENTER_HIGH (138).
         assert!(!near_boundary(90.0, HingeState::Tablet));
+    }
+
+    #[test]
+    fn near_boundary_true_for_hand_held_tent_calibration_reading() {
+        // The real hand_held_tent calibration reading (149.02 degrees, see
+        // angle.rs's cross-validated test data) is 11.02 degrees from
+        // LAPTOP_ENTER_HIGH (138.0) -- outside the old 10-degree margin but
+        // inside the widened 15-degree one. Pins the exact reading that
+        // motivated widening NEAR_THRESHOLD_MARGIN_DEG.
+        assert!(near_boundary(149.02, HingeState::Tablet));
     }
 
     #[test]

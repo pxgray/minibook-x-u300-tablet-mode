@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub fn parse_raw_component(s: &str) -> Result<i64, String> {
     s.trim()
@@ -32,6 +32,7 @@ fn read_component(dir: &Path, filename: &str) -> io::Result<i64> {
 /// loop; the rarer startup/resume reads in classify_current_orientation
 /// keep using the simpler read_vector above.
 pub struct AccelReader {
+    dir: PathBuf,
     x: File,
     y: File,
     z: File,
@@ -41,6 +42,7 @@ pub struct AccelReader {
 impl AccelReader {
     pub fn open(iio_device_dir: &Path) -> io::Result<Self> {
         Ok(AccelReader {
+            dir: iio_device_dir.to_path_buf(),
             x: File::open(iio_device_dir.join("in_accel_x_raw"))?,
             y: File::open(iio_device_dir.join("in_accel_y_raw"))?,
             z: File::open(iio_device_dir.join("in_accel_z_raw"))?,
@@ -48,11 +50,35 @@ impl AccelReader {
         })
     }
 
+    /// Rereads all three axes, retrying once via a fresh reopen-by-path if
+    /// the first attempt fails. A held-open fd to a sysfs device whose
+    /// backing kernel object was removed (e.g. an i2c delete_device/new_device
+    /// re-enumeration cycle, see scripts/add-second-accelerometer.sh) returns
+    /// an error permanently, unlike a plain path-based reopen -- this restores
+    /// the old read_vector's per-call reopen-by-path recovery property for
+    /// that one case, without paying the cost of reopening on every call.
     pub fn read(&mut self) -> io::Result<(f64, f64, f64)> {
+        match self.read_once() {
+            Ok(v) => Ok(v),
+            Err(_) => {
+                self.reopen()?;
+                self.read_once()
+            }
+        }
+    }
+
+    fn read_once(&mut self) -> io::Result<(f64, f64, f64)> {
         let x = Self::read_one(&mut self.x, &mut self.buf)?;
         let y = Self::read_one(&mut self.y, &mut self.buf)?;
         let z = Self::read_one(&mut self.z, &mut self.buf)?;
         Ok((x as f64, y as f64, z as f64))
+    }
+
+    fn reopen(&mut self) -> io::Result<()> {
+        self.x = File::open(self.dir.join("in_accel_x_raw"))?;
+        self.y = File::open(self.dir.join("in_accel_y_raw"))?;
+        self.z = File::open(self.dir.join("in_accel_z_raw"))?;
+        Ok(())
     }
 
     fn read_one(file: &mut File, buf: &mut String) -> io::Result<i64> {
@@ -137,5 +163,54 @@ mod tests {
         ));
         std::fs::remove_dir_all(&dir).ok();
         assert!(AccelReader::open(&dir).is_err());
+    }
+
+    #[test]
+    fn accel_reader_read_recovers_after_one_reopen_on_error() {
+        let n = TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "minibookd-accel-test-{}-{}",
+            std::process::id(),
+            n
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        // in_accel_x_raw starts out as a directory: File::open succeeds on a
+        // directory on Linux, but read_to_string on it fails with EISDIR --
+        // a stand-in for a device path that's temporarily unusable.
+        std::fs::create_dir(dir.join("in_accel_x_raw")).unwrap();
+        std::fs::write(dir.join("in_accel_y_raw"), "2").unwrap();
+        std::fs::write(dir.join("in_accel_z_raw"), "3").unwrap();
+
+        let mut reader = AccelReader::open(&dir).unwrap();
+
+        // Replace the directory with a real file before the read happens,
+        // simulating the path becoming usable again (e.g. after a device
+        // re-enumeration).
+        std::fs::remove_dir(dir.join("in_accel_x_raw")).unwrap();
+        std::fs::write(dir.join("in_accel_x_raw"), "42").unwrap();
+
+        assert_eq!(reader.read().unwrap(), (42.0, 2.0, 3.0));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn accel_reader_read_returns_error_when_reopen_also_fails() {
+        let n = TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "minibookd-accel-test-{}-{}",
+            std::process::id(),
+            n
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir(dir.join("in_accel_x_raw")).unwrap();
+        std::fs::write(dir.join("in_accel_y_raw"), "2").unwrap();
+        std::fs::write(dir.join("in_accel_z_raw"), "3").unwrap();
+
+        let mut reader = AccelReader::open(&dir).unwrap();
+        // in_accel_x_raw is left as a directory: both the original read and
+        // the post-reopen retry hit the same EISDIR failure, so read() must
+        // propagate an error rather than panicking or looping.
+        assert!(reader.read().is_err());
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
