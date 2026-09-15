@@ -94,7 +94,7 @@ fn main() -> ExitCode {
     // Laptop outright: a unit that happens to boot already folded closed
     // should come up in Tablet, not have its keyboard force-enabled while
     // folded shut.
-    let initial_state = reconcile(&opts, &uinput_switch);
+    let initial_state = reconcile(&opts, None, &uinput_switch);
     let state_machine = Arc::new(Mutex::new(state::StateMachine::from_state(initial_state)));
 
     let watchdog = watchdog::Watchdog::new();
@@ -156,7 +156,8 @@ fn main() -> ExitCode {
         thread::spawn(move || {
             for _ in signals.forever() {
                 eprintln!("minibookd: caught SIGUSR1 (resume), reconciling to current hinge angle");
-                let target = reconcile(&opts_for_signal, &sw);
+                let prev = lock_state(&sm).current();
+                let target = reconcile(&opts_for_signal, Some(prev), &sw);
                 *lock_state(&sm) = state::StateMachine::from_state(target);
             }
         });
@@ -286,7 +287,10 @@ fn handle_transition(
         return;
     }
 
-    if let Err(e) = apply_state(target, opts, uinput_switch) {
+    // A confirmed transition always warrants the display reset when
+    // landing on Laptop: the state machine only reports a transition on
+    // an actual change, unlike reconcile()'s one-shot classification.
+    if let Err(e) = apply_state(target, true, opts, uinput_switch) {
         if target == HingeState::Laptop {
             eprintln!(
                 "minibookd: LTSM(0) failed, exiting so systemd's ExecStopPost can retry the revert: {e}"
@@ -296,13 +300,30 @@ fn handle_transition(
     }
 }
 
+/// Whether reconciling to `target` should also reset Mutter's display
+/// rotation. Only true for an actual observed Tablet-to-Laptop change,
+/// matching the original live-transition-only behavior: `reconcile()` at
+/// plain startup has no prior state to compare against (`prev: None`) and
+/// must not reset display rotation there, since the old startup
+/// reconciliation never did either. Resuming while already in Laptop
+/// (`prev: Some(Laptop)`) is steady state, not a transition, so it's
+/// skipped too: there's nothing for Mutter to have gotten wrong.
+fn needs_display_reset(prev: Option<HingeState>, target: HingeState) -> bool {
+    prev == Some(HingeState::Tablet) && target == HingeState::Laptop
+}
+
 /// Writes `target` to hardware (LTSM + uinput switch) unconditionally;
 /// callers decide whether dry-run should skip calling this at all, and
-/// whether a failure is fatal. Shared by `handle_transition` (the debounced
-/// live-poll path) and `reconcile` (the one-shot startup/resume path) so
-/// the actual ACPI/uinput/display-reset calls exist in exactly one place.
+/// whether a failure is fatal. `reset_display` additionally controls the
+/// Mutter rotation-reset (see `needs_display_reset`), since only a real
+/// Tablet-to-Laptop transition should trigger it, not every reconciliation
+/// that happens to land on Laptop. Shared by `handle_transition` (the
+/// debounced live-poll path, always a real transition) and `reconcile`
+/// (the one-shot startup/resume path) so the actual
+/// ACPI/uinput/display-reset calls exist in exactly one place.
 fn apply_state(
     target: HingeState,
+    reset_display: bool,
     opts: &cli::Cli,
     uinput_switch: &Mutex<Option<uinput::TabletSwitch>>,
 ) -> io::Result<()> {
@@ -330,8 +351,10 @@ fn apply_state(
         // (see README's Empirical validation section). Not
         // safety-critical like the LTSM(0) revert above, so a failure here
         // is logged but doesn't change the outcome.
-        if let Err(e) = display::reset_rotation() {
-            eprintln!("minibookd: failed to reset display rotation: {e}");
+        if reset_display {
+            if let Err(e) = display::reset_rotation() {
+                eprintln!("minibookd: failed to reset display rotation: {e}");
+            }
         }
         result.map(|_| ())
     }
@@ -369,8 +392,9 @@ fn classify_current_orientation(opts: &cli::Cli) -> HingeState {
 }
 
 /// Reconciles hardware to the unit's actual current orientation. Used both
-/// at process startup (replacing the old hardcoded "always force Laptop")
-/// and on resume from suspend (see the SIGUSR1 handler in `main`), since a
+/// at process startup (`prev: None`, replacing the old hardcoded "always
+/// force Laptop") and on resume from suspend (`prev: Some(state_machine's
+/// belief before this call)`, see the SIGUSR1 handler in `main`), since a
 /// unit can be physically folded into Tablet shape in either case. Returns
 /// the classified state so the caller can (re)seed the running
 /// `StateMachine` to match what was just written to hardware.
@@ -379,14 +403,50 @@ fn classify_current_orientation(opts: &cli::Cli) -> HingeState {
 /// `handle_transition`'s live ToLaptop path: a transient ACPI failure here
 /// shouldn't crash-loop the whole daemon before its main loop ever starts,
 /// or kill it mid-run over a resume-time hiccup.
-fn reconcile(opts: &cli::Cli, uinput_switch: &Mutex<Option<uinput::TabletSwitch>>) -> HingeState {
+fn reconcile(
+    opts: &cli::Cli,
+    prev: Option<HingeState>,
+    uinput_switch: &Mutex<Option<uinput::TabletSwitch>>,
+) -> HingeState {
     let target = classify_current_orientation(opts);
+    let reset_display = needs_display_reset(prev, target);
 
     if opts.dry_run {
         println!("minibookd: [dry-run] reconcile: would apply {target:?}");
-    } else if let Err(e) = apply_state(target, opts, uinput_switch) {
+    } else if let Err(e) = apply_state(target, reset_display, opts, uinput_switch) {
         eprintln!("minibookd: reconcile: failed to apply {target:?}: {e}");
     }
 
     target
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resets_display_when_reconciling_from_tablet_to_laptop() {
+        assert!(needs_display_reset(Some(HingeState::Tablet), HingeState::Laptop));
+    }
+
+    #[test]
+    fn does_not_reset_display_with_no_prior_state() {
+        // Plain startup: no prior belief to compare against, so no reset.
+        // Matches the old startup reconciliation, which never called
+        // display::reset_rotation() at all.
+        assert!(!needs_display_reset(None, HingeState::Laptop));
+    }
+
+    #[test]
+    fn does_not_reset_display_when_already_laptop() {
+        // Steady-state resume-while-already-Laptop: nothing changed, no
+        // reason to touch Mutter's rotation config.
+        assert!(!needs_display_reset(Some(HingeState::Laptop), HingeState::Laptop));
+    }
+
+    #[test]
+    fn does_not_reset_display_when_target_is_tablet() {
+        assert!(!needs_display_reset(Some(HingeState::Laptop), HingeState::Tablet));
+        assert!(!needs_display_reset(None, HingeState::Tablet));
+    }
 }
