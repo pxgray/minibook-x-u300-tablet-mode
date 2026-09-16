@@ -2,3 +2,11 @@
 docs/superpowers/
 .superpowers/
 daemon/target/
+kernel/minibook-lid-wake/*.o
+kernel/minibook-lid-wake/*.ko
+kernel/minibook-lid-wake/*.mod
+kernel/minibook-lid-wake/*.mod.c
+kernel/minibook-lid-wake/.*.cmd
+kernel/minibook-lid-wake/.module-common.o
+kernel/minibook-lid-wake/Module.symvers
+kernel/minibook-lid-wake/modules.order

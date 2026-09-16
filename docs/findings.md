@@ -528,3 +528,58 @@ real suspend/resume cycle shows `systemd` delivering `SIGUSR1` and the
 daemon logging `caught SIGUSR1 (resume), reconciling to current hinge
 angle` in `journalctl -u minibookd`, with the service remaining active and
 no errors afterward.
+
+### 10. Lid-open couldn't wake the system from suspend; fixed with a GPE force-arm module
+
+**Symptom**, unrelated to `minibookd` or the `LTSM` findings above: closing
+the lid suspends the system (pre-existing GNOME/`logind` behavior, nothing
+this project changes), but opening it back up does not resume it -- only
+touching the keyboard or touchpad does.
+
+**Root cause, confirmed from the live DSDT**: the ACPI Lid device (`LID0`,
+`PNP0C0D`) has no `_PRW` (Power Resources for Wake) method and no `_PSW`
+(Power State Wake) method -- nothing that gives Linux a way to arm it as a
+wake source. This matches two other independent observations on this
+unit: `/proc/acpi/wakeup` lists no `LID0` entry at all (only `PWRB`,
+`XHCI`, `AWAC`, and others), and `dmesg` logs `ACPI: button: [Firmware
+Bug]: Unexpected lid state reported by firmware`. By contrast, in the same
+DSDT, the keyboard device (`PS2K`) has a `_PSW` method and the touchpad's
+ACPI GPIO interrupt resource is explicitly flagged `ExclusiveAndWake` --
+both of those *do* have a working wake path, which is consistent with why
+touching either cancels suspend while lid-open doesn't.
+
+The lid's `Notify (LID0, 0x80)` status-change calls are dispatched through
+the embedded controller's own GPE (`dmesg`: `ACPI: EC: GPE=0x6e`), which is
+real wake-capable hardware -- firmware just never marks it for wake.
+
+**Fix, adapted from prior art on different hardware**:
+[linux-surface/surface-gpe](https://github.com/linux-surface/surface-gpe)
+solves the identical problem (no `_PRW` on the lid) on several Microsoft
+Surface models, by calling `acpi_mark_gpe_for_wake()` + `acpi_enable_gpe()`
+on a model-specific GPE at driver probe, then toggling
+`acpi_set_gpe_wake_mask()` around each suspend/resume cycle.
+[`kernel/minibook-lid-wake/`](../kernel/minibook-lid-wake/) is the same
+technique, hardcoded to GPE `0x6E` for this one unit (see `CLAUDE.md`'s
+single-unit convention) instead of the DMI-matched table the Surface
+driver uses across many models. No MiniBook X community project
+(checked: all repos in this README's Related projects list) has
+documented this problem or a fix; this is adapted from Surface-specific
+prior art, not MiniBook-specific prior art.
+
+**Validated on real hardware**: after loading the module, closing the lid
+and reopening it (without touching keyboard/touchpad) resumed the system.
+A follow-up soak test left the lid closed for 18 minutes 10 seconds;
+`journalctl -k` shows a single unbroken `PM: suspend entry` / `PM: suspend
+exit` pair spanning the whole window, with the resume landing right when
+the lid was reopened -- no spurious wakes during that window.
+
+**Caveat, only partially tested**: GPE `0x6E` is the EC's *shared* event
+line -- the DSDT dispatches AC-plug, battery, thermal, and other EC events
+through the same `_Qxx` handlers/GPE as the lid. It's confirmed very
+active during normal (awake) operation: `/sys/firmware/acpi/interrupts/gpe6E`
+was sampled twice a few seconds apart while idle and awake, and incremented
+34 times in that gap. That's why the 18-minute no-spurious-wake soak test
+matters, but one 18-minute run isn't proof this never happens -- longer
+and overnight soak tests, and a dedicated "plug in the charger while
+asleep" test, are still open despite the module now loading at every boot
+(see `kernel/minibook-lid-wake/README.md`).
