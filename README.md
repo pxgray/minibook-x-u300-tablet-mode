@@ -121,7 +121,16 @@ suspend. No separate enablement step; systemd runs everything under
 `/usr/lib/systemd/system-sleep/` automatically. Confirmed working on real
 hardware ([`docs/findings.md`](docs/findings.md), finding 9).
 
-**5. Verify:** fold the hinge into a Tablet-range position (see the
+**5. (Optional) Install the lid-wake module:** unrelated to `minibookd`
+itself, but fixes a separate bug on this hardware where opening the lid
+doesn't cancel suspend (only keyboard/touchpad input does). See
+[`kernel/minibook-lid-wake/README.md`](kernel/minibook-lid-wake/) for
+build and DKMS install steps, and
+[`docs/findings.md`](docs/findings.md), finding 10, for why it's needed
+and its validation status (one 18-minute soak test passed; longer-term
+validation still open).
+
+**6. Verify:** fold the hinge into a Tablet-range position (see the
 Laptop/Tablet ranges in [`docs/findings.md`](docs/findings.md), finding 5)
 and confirm the keyboard/touchpad disable and check `journalctl -u
 minibookd` for the transition log line.
@@ -175,6 +184,13 @@ baseline it was tested against, are in [`docs/findings.md`](docs/findings.md).
 9. The daemon has no native suspend/resume awareness; a systemd-sleep
    hook sends it `SIGUSR1` to force reconciliation, confirmed working on
    real hardware.
+10. Opening the lid didn't cancel suspend because the ACPI Lid device has
+    no wake resource (`_PRW`/`_PSW`) in this unit's DSDT at all -- fixed by
+    [`kernel/minibook-lid-wake/`](kernel/minibook-lid-wake/), a small
+    out-of-tree module that force-arms the EC's GPE for wake instead,
+    adapted from the Microsoft Surface line's identical fix. Confirmed
+    working (lid-open resumes the system) and no spurious wakes over an
+    18-minute closed-lid soak test; longer-term validation still open.
 
 ## Contributing
 
