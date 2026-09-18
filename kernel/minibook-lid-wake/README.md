@@ -23,12 +23,21 @@ Built and validated only against this repo's one documented unit: kernel
 see finding 10). Confirm both independently before assuming they apply to
 your unit, the same as every other finding in this repo.
 
-This unit's kernel is built with Clang/LLVM, not GCC (`vermagic` and
-`modinfo` will tell you which one yours uses). Building against a
-Clang-built kernel with `gcc` fails with a string of `unrecognized
-command-line option` errors from flags the kernel's build system only
-passes to Clang; pass `LLVM=1` to `make`/`dkms` as below if you're in the
-same situation.
+This unit's primary kernel (`cachyos`) is built with Clang/LLVM, not GCC
+(`vermagic` and `modinfo` will tell you which one yours uses). Building
+against a Clang-built kernel with `gcc` fails with a string of
+`unrecognized command-line option` errors from flags the kernel's build
+system only passes to Clang; pass `LLVM=1` to `make` as below if you're in
+the same situation.
+
+This unit also runs the `cachyos-lts` kernel, which is GCC-built
+(`CONFIG_CC_IS_CLANG` is unset in its `/lib/modules/*/build/.config`,
+where `cachyos`'s has it set). `dkms.conf` detects this per kernel from
+that kernel's own `.config` and only adds `LLVM=1` when it's Clang-built,
+since DKMS builds the same source against every installed kernel and a
+hardcoded `LLVM=1` broke the GCC-built one with the same class of
+unrecognized-flag errors, just clang rejecting GCC-only flags instead.
+Confirmed by rebuilding against both kernels after the fix.
 
 ## Build and load manually (for testing)
 
