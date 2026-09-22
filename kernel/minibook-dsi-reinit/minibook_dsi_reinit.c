@@ -29,6 +29,11 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/moduleparam.h>
+#include <linux/pci.h>
+#include <linux/device.h>
+#include <linux/workqueue.h>
+#include <linux/atomic.h>
+#include <linux/jiffies.h>
 
 static bool active;
 module_param(active, bool, 0644);
@@ -36,14 +41,71 @@ MODULE_PARM_DESC(active,
 	"perform the real device_release_driver/device_attach reprobe "
 	"(default off: log-only dry run)");
 
+/* From lspci -nn on this unit -- see docs/findings.md. */
+#define MINIBOOK_DSI_VENDOR_ID 0x8086
+#define MINIBOOK_DSI_DEVICE_ID 0xa7a9
+
+/* Delay between the bind event/check and forcing the reprobe, so i915's
+ * own async probe work (firmware loading, connector detection) settles
+ * first -- triggering mid-probe risks a race worse than the bug being
+ * fixed. */
+#define MINIBOOK_DSI_REINIT_DELAY_MS 1500
+
+static atomic_t reinit_fired = ATOMIC_INIT(0);
+static struct delayed_work reinit_work;
+
+static void reinit_work_fn(struct work_struct *work)
+{
+	struct pci_dev *pdev;
+
+	pdev = pci_get_device(MINIBOOK_DSI_VENDOR_ID, MINIBOOK_DSI_DEVICE_ID,
+			       NULL);
+	if (!pdev) {
+		pr_err("target GPU disappeared before reinit could run\n");
+		return;
+	}
+
+	dev_info(&pdev->dev,
+		 "dry run: would force device_release_driver + "
+		 "device_attach now (active=%d)\n", active);
+	pci_dev_put(pdev);
+}
+
+static void schedule_dsi_reinit_once(const char *reason)
+{
+	if (atomic_cmpxchg(&reinit_fired, 0, 1) != 0) {
+		pr_info("reinit already scheduled/fired this load, "
+			"ignoring trigger (%s)\n", reason);
+		return;
+	}
+
+	pr_info("scheduling DSI reinit in %d ms (%s)\n",
+		MINIBOOK_DSI_REINIT_DELAY_MS, reason);
+	schedule_delayed_work(&reinit_work,
+			      msecs_to_jiffies(MINIBOOK_DSI_REINIT_DELAY_MS));
+}
+
 static int __init minibook_dsi_reinit_init(void)
 {
+	struct pci_dev *pdev;
+
+	INIT_DELAYED_WORK(&reinit_work, reinit_work_fn);
+
+	pdev = pci_get_device(MINIBOOK_DSI_VENDOR_ID, MINIBOOK_DSI_DEVICE_ID,
+			       NULL);
+	if (pdev) {
+		if (pdev->dev.driver)
+			schedule_dsi_reinit_once("already bound at load");
+		pci_dev_put(pdev);
+	}
+
 	pr_info("loaded (active=%d)\n", active);
 	return 0;
 }
 
 static void __exit minibook_dsi_reinit_exit(void)
 {
+	cancel_delayed_work_sync(&reinit_work);
 	pr_info("unloaded\n");
 }
 
