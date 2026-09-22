@@ -34,6 +34,7 @@
 #include <linux/workqueue.h>
 #include <linux/atomic.h>
 #include <linux/jiffies.h>
+#include <linux/notifier.h>
 
 static bool active;
 module_param(active, bool, 0644);
@@ -85,11 +86,43 @@ static void schedule_dsi_reinit_once(const char *reason)
 			      msecs_to_jiffies(MINIBOOK_DSI_REINIT_DELAY_MS));
 }
 
+static bool is_target_device(struct device *dev)
+{
+	struct pci_dev *pdev;
+
+	if (!dev_is_pci(dev))
+		return false;
+
+	pdev = to_pci_dev(dev);
+	return pdev->vendor == MINIBOOK_DSI_VENDOR_ID &&
+	       pdev->device == MINIBOOK_DSI_DEVICE_ID;
+}
+
+static struct notifier_block reinit_nb;
+
+static int reinit_bus_notify(struct notifier_block *nb, unsigned long action,
+			      void *data)
+{
+	struct device *dev = data;
+
+	if (action != BUS_NOTIFY_BOUND_DRIVER)
+		return NOTIFY_DONE;
+
+	if (!is_target_device(dev))
+		return NOTIFY_DONE;
+
+	schedule_dsi_reinit_once("live bus notifier");
+	return NOTIFY_DONE;
+}
+
 static int __init minibook_dsi_reinit_init(void)
 {
 	struct pci_dev *pdev;
 
 	INIT_DELAYED_WORK(&reinit_work, reinit_work_fn);
+
+	reinit_nb.notifier_call = reinit_bus_notify;
+	bus_register_notifier(&pci_bus_type, &reinit_nb);
 
 	pdev = pci_get_device(MINIBOOK_DSI_VENDOR_ID, MINIBOOK_DSI_DEVICE_ID,
 			       NULL);
@@ -105,6 +138,7 @@ static int __init minibook_dsi_reinit_init(void)
 
 static void __exit minibook_dsi_reinit_exit(void)
 {
+	bus_unregister_notifier(&pci_bus_type, &reinit_nb);
 	cancel_delayed_work_sync(&reinit_work);
 	pr_info("unloaded\n");
 }
