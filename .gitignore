@@ -10,3 +10,11 @@ kernel/minibook-lid-wake/.*.cmd
 kernel/minibook-lid-wake/.module-common.o
 kernel/minibook-lid-wake/Module.symvers
 kernel/minibook-lid-wake/modules.order
+kernel/minibook-dsi-reinit/*.o
+kernel/minibook-dsi-reinit/*.ko
+kernel/minibook-dsi-reinit/*.mod
+kernel/minibook-dsi-reinit/*.mod.c
+kernel/minibook-dsi-reinit/.*.cmd
+kernel/minibook-dsi-reinit/.module-common.o
+kernel/minibook-dsi-reinit/Module.symvers
+kernel/minibook-dsi-reinit/modules.order
