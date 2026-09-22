@@ -29,10 +29,23 @@ automatically.
 
 ## STATUS
 
-Untested prototype. Not yet a claim recorded in `docs/findings.md`'s
-Empirical validation section per this repo's editorial standards. Gated
-behind the `active` module parameter (default off) until the Phase 2
-multi-boot acceptance test below has actually been run and observed.
+Validated on real hardware. Three consecutive full cold boots with
+`active=1` (embedded in the initramfs) all reproduced the actual DSI
+panel-init bug and cleared it automatically within ~250-350ms of the
+trigger firing, with no crashes and no visible corruption observed by the
+user on any boot. See `docs/findings.md`'s "Intermittent DSI panel-init
+failure at boot" entry for the full log evidence. Longer-term/overnight
+soak testing is still open.
+
+**Testing note**: validate this module's real action only via a real
+early boot (as done above), never by manually invoking
+`device_release_driver`/`device_attach` (or an equivalent manual `i915`
+sysfs unbind) against a live, in-use desktop session. An early attempt to
+do exactly that crashed the kernel and required a hard reboot -- a known,
+currently-unfixed upstream DRM/i915 bug where unbinding while a
+compositor holds open DRM file descriptors corrupts framebuffer cleanup,
+not a defect in this module. See `docs/findings.md` for the full
+writeup.
 
 ## Build and load manually (for testing)
 

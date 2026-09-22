@@ -583,3 +583,102 @@ matters, but one 18-minute run isn't proof this never happens -- longer
 and overnight soak tests, and a dedicated "plug in the charger while
 asleep" test, are still open despite the module now loading at every boot
 (see `kernel/minibook-lid-wake/README.md`).
+
+### 11. Intermittent DSI panel-init failure at boot; fixed by forcing one `i915` driver reprobe
+
+**Symptom**: this unit's screen intermittently boots into a visibly
+corrupted state (garbled/split panel output). A shallow sleep/wake cycle
+has always cleared it by hand. `dmesg`/`journalctl -k` shows `i915
+0000:00:02.0: [drm] *ERROR* DSI link not ready` at the point of failure.
+
+**Root cause, confirmed on this unit**: `i915` is a loadable module
+(`CONFIG_DRM_I915=m`) pulled into the initramfs by `mkinitcpio`'s `kms`
+hook, and binds very early in boot (~0.6s after boot start, confirmed via
+`journalctl -k -b -o short-precise`, well before the real root is
+mounted). The DSI link fails once during that first probe. First
+diagnosed 2026-09-13 on kernel `7.2.4-3-cachyos`; reconfirmed still
+present on `7.2.6-1-cachyos` (2026-09-19) and again during this fix's
+validation (2026-09-22). Checked against the two known upstream bug
+shapes at diagnosis time (an init-order bug fixed in 6.8.4; a clock-lane
+regression with a community `icl_dsi.c` backport at
+[vmunoz82/chuwifix](https://github.com/vmunoz82/chuwifix)) -- this exact
+error message on this exact kernel matches neither; not filed upstream.
+The manual sleep/wake recovery works because it forces the panel-enable
+sequence to run again (observed: a full GuC/HuC firmware reload and
+re-bind, `mei_hdcp`/`mei_pxp`/`snd_hda_intel` all rebinding to `i915`,
+~20s after the failure), consistent with the GPU getting reset and
+reinitialized correctly the second time.
+
+**Fix**: [`kernel/minibook-dsi-reinit/`](../kernel/minibook-dsi-reinit/),
+an out-of-tree module that registers a PCI bus notifier for `i915`'s bind
+event (`8086:a7a9` at `0000:00:02.0`), plus an already-bound-at-init
+fallback check for the case where `i915` wins the load-order race before
+the notifier is live. Whichever path fires, ~1.5s later the module
+performs the kernel-space equivalent of the sysfs `unbind`/`bind` dance
+(`device_release_driver()` + `device_attach()`) -- the same exported
+functions the sysfs files use internally, and the same underlying
+recovery a manual sleep/wake already triggers, just forced automatically
+within about a second of boot instead of relying on the user noticing
+corruption and intervening by hand. A one-shot guard (an atomic
+compare-and-swap) prevents the module's own forced rebind from
+re-triggering itself. Gated behind an `active` module parameter (default
+off) so the trigger logic could be validated via logging alone before the
+real action was ever enabled; see
+[`docs/superpowers/specs/2026-09-19-dsi-reinit-fix-design.md`](superpowers/specs/2026-09-19-dsi-reinit-fix-design.md)
+for the full design rationale.
+
+**A note on how this was validated**: an initial attempt to validate the
+mechanism by manually unbinding `i915` via sysfs against the live,
+in-use GNOME desktop session caused an immediate kernel crash requiring a
+hard reboot -- confirmed via `journalctl -k -b -1` as a known,
+currently-unfixed upstream DRM/i915 bug (`intel_mode_config_cleanup`
+running before all DRM file descriptors held by an attached compositor
+are closed, corrupting the framebuffer list: see
+[this LKML thread](https://lkml.iu.edu/hypermail/linux/kernel/1912.2/04679.html)
+and the in-flight "drm/i915: Eliminate FB usage..." patch series), not a
+defect in this module. This is unrelated to the DSI bug itself, but it
+means the module's real action must only ever be validated at real early
+boot (before any compositor attaches), never by manually invoking it
+against a live desktop session -- all validation below was done that way.
+
+**Validated on real hardware**: after embedding the module in the
+initramfs with `active=1`, three consecutive full cold boots all showed
+the same clean pattern. Representative boot (`journalctl -k -b -o
+short-precise`):
+
+```
+15:15:16.045  minibook_dsi_reinit: loaded (active=1)
+15:15:16.819  i915 0000:00:02.0: [drm] Found alderlake_p/raptorlake_u ...
+15:15:16.906  minibook_dsi_reinit: scheduling DSI reinit in 1500 ms (live bus notifier)
+15:15:18.182  i915 0000:00:02.0: [drm] *ERROR* DSI link not ready
+15:15:18.412  i915 0000:00:02.0: forcing driver reprobe to clear DSI init race
+15:15:18.963  i915 0000:00:02.0: [drm] Found alderlake_p/raptorlake_u ...
+15:15:19.040  minibook_dsi_reinit: reinit already scheduled/fired this load, ignoring trigger (live bus notifier)
+15:15:19.040  i915 0000:00:02.0: reprobe complete
+```
+
+The real bug reproduced on all three boots (not merely a dry run), and
+the forced reprobe cleared it automatically each time, roughly
+250-350ms after the trigger fired -- well under the ~20s the manual
+sleep/wake recovery takes. `device_attach` returned success (no
+`device_attach failed` or "no driver claimed" log lines) on all three,
+and the module's own self-triggered rebind (the second `Found` line
+above) was correctly ignored by the one-shot guard rather than
+re-scheduling. The user directly observed all three boots: normal
+`plymouth` boot animation, no visible screen corruption at any point --
+notably `plymouth` was actively rendering during the reprobe window on
+the representative boot above and the reprobe still completed cleanly,
+which is evidence against the reprobe itself being unsafe with an active
+DRM client, in contrast to the live-desktop crash described above. A
+preceding dry-run (`active=0`) boot also showed the same bug occurring
+(`DSI link not ready` with no forced reprobe, since dry-run only logs),
+confirming the bug's continued presence on this kernel independent of
+the fix.
+
+**Caveat, only partially tested**: three cold boots is enough to trust
+the mechanism per this repo's editorial standard, but not enough to rule
+out a rarer failure mode; longer-term/overnight multi-boot soak testing
+is still open. The bug's underlying trigger condition (why the DSI link
+fails on the first probe at all) remains unknown -- this fix treats the
+symptom the same way the manual sleep/wake workaround always has, not
+the root timing/hardware cause.

@@ -191,6 +191,14 @@ baseline it was tested against, are in [`docs/findings.md`](docs/findings.md).
     adapted from the Microsoft Surface line's identical fix. Confirmed
     working (lid-open resumes the system) and no spurious wakes over an
     18-minute closed-lid soak test; longer-term validation still open.
+11. An intermittent DSI panel-init failure at boot (`[drm] *ERROR* DSI
+    link not ready`, previously only fixable by a manual sleep/wake) is
+    fixed by [`kernel/minibook-dsi-reinit/`](kernel/minibook-dsi-reinit/),
+    a module that forces one `i915` driver reprobe (the same recovery
+    sleep/wake performs) within about a second of boot. Confirmed working
+    across three consecutive real cold boots, each reproducing the actual
+    bug and clearing it automatically with no visible corruption;
+    longer-term soak testing still open.
 
 ## Contributing
 
