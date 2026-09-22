@@ -28,10 +28,17 @@
 
 #include <linux/module.h>
 #include <linux/kernel.h>
+#include <linux/moduleparam.h>
+
+static bool active;
+module_param(active, bool, 0644);
+MODULE_PARM_DESC(active,
+	"perform the real device_release_driver/device_attach reprobe "
+	"(default off: log-only dry run)");
 
 static int __init minibook_dsi_reinit_init(void)
 {
-	pr_info("loaded\n");
+	pr_info("loaded (active=%d)\n", active);
 	return 0;
 }
 
