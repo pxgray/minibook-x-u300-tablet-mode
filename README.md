@@ -130,7 +130,45 @@ build and DKMS install steps, and
 and its validation status (one 18-minute soak test passed; longer-term
 validation still open).
 
-**6. Verify:** fold the hinge into a Tablet-range position (see the
+**6. (Optional) Install the dsi-reinit module:** also unrelated to
+`minibookd` itself, but fixes a separate bug on this hardware where the
+screen intermittently boots into a corrupted state. Same DKMS pattern as
+the lid-wake module above:
+
+```sh
+sudo mkdir -p /usr/src/minibook-dsi-reinit-0.1
+sudo cp kernel/minibook-dsi-reinit/{minibook_dsi_reinit.c,Kbuild,Makefile,dkms.conf} /usr/src/minibook-dsi-reinit-0.1/
+sudo dkms add -m minibook-dsi-reinit -v 0.1
+sudo dkms build -m minibook-dsi-reinit -v 0.1
+sudo dkms install -m minibook-dsi-reinit -v 0.1
+```
+
+Unlike lid-wake, this module must also be embedded in the initramfs to
+have any chance of working, since `i915` binds before
+`/etc/modules-load.d` would ever load it:
+
+```sh
+# /etc/mkinitcpio.conf
+MODULES=(... minibook_dsi_reinit)
+```
+
+```sh
+# /etc/modprobe.d/minibook-dsi-reinit.conf
+options minibook_dsi_reinit active=1
+```
+
+```sh
+sudo mkinitcpio -P
+```
+
+See [`kernel/minibook-dsi-reinit/README.md`](kernel/minibook-dsi-reinit/)
+for the full procedure (including the dry-run Phase 1 step recommended
+before enabling `active=1`), and
+[`docs/findings.md`](docs/findings.md), finding 11, for why it's needed
+and its validation status (three consecutive clean cold boots; longer-term
+soak testing still open).
+
+**7. Verify:** fold the hinge into a Tablet-range position (see the
 Laptop/Tablet ranges in [`docs/findings.md`](docs/findings.md), finding 5)
 and confirm the keyboard/touchpad disable and check `journalctl -u
 minibookd` for the transition log line.
@@ -195,10 +233,11 @@ baseline it was tested against, are in [`docs/findings.md`](docs/findings.md).
     link not ready`, previously only fixable by a manual sleep/wake) is
     fixed by [`kernel/minibook-dsi-reinit/`](kernel/minibook-dsi-reinit/),
     a module that forces one `i915` driver reprobe (the same recovery
-    sleep/wake performs) within about a second of boot. Confirmed working
-    across three consecutive real cold boots, each reproducing the actual
-    bug and clearing it automatically with no visible corruption;
-    longer-term soak testing still open.
+    sleep/wake performs) within about three seconds of boot. Confirmed
+    working across three consecutive real cold boots, each reproducing
+    the actual bug and clearing it automatically (under a second from
+    failure to fixed) with no visible corruption; longer-term soak
+    testing still open.
 
 ## Contributing
 

@@ -618,8 +618,8 @@ performs the kernel-space equivalent of the sysfs `unbind`/`bind` dance
 (`device_release_driver()` + `device_attach()`) -- the same exported
 functions the sysfs files use internally, and the same underlying
 recovery a manual sleep/wake already triggers, just forced automatically
-within about a second of boot instead of relying on the user noticing
-corruption and intervening by hand. A one-shot guard (an atomic
+within about three seconds of boot instead of relying on the user
+noticing corruption and intervening by hand. A one-shot guard (an atomic
 compare-and-swap) prevents the module's own forced rebind from
 re-triggering itself. Gated behind an `active` module parameter (default
 off) so the trigger logic could be validated via logging alone before the
@@ -658,9 +658,10 @@ short-precise`):
 ```
 
 The real bug reproduced on all three boots (not merely a dry run), and
-the forced reprobe cleared it automatically each time, roughly
-250-350ms after the trigger fired -- well under the ~20s the manual
-sleep/wake recovery takes. `device_attach` returned success (no
+the forced reprobe cleared it automatically each time, in well under a
+second from the DSI failure being logged to the reprobe completing (858ms
+on the representative boot above: 18.182 to 19.040) -- well under the
+~20s the manual sleep/wake recovery takes. `device_attach` returned success (no
 `device_attach failed` or "no driver claimed" log lines) on all three,
 and the module's own self-triggered rebind (the second `Found` line
 above) was correctly ignored by the one-shot guard rather than

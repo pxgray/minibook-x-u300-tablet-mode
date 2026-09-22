@@ -25,9 +25,11 @@
  * one unit (see CLAUDE.md), so the GPE number below is hardcoded rather
  * than DMI-matched.
  *
- * STATUS: untested prototype. Not yet run against real hardware, not yet
- * a claim recorded in docs/findings.md's Empirical validation section per
- * this repo's editorial standards -- see kernel/minibook-lid-wake/README.md.
+ * STATUS: confirmed working on real hardware. Lid-open resumed the system
+ * after loading this module, and an 18-minute closed-lid soak test showed
+ * no spurious wakes -- see docs/findings.md, finding 10, for the full
+ * evidence. Longer-term/overnight soak testing is still open -- see
+ * kernel/minibook-lid-wake/README.md.
  *
  * KNOWN CAVEAT (also untested): GPE 0x6E is the EC's *shared* event line
  * -- AC-plug, battery, thermal, and other EC _Qxx handlers all notify

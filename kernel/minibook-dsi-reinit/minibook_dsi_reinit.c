@@ -19,8 +19,11 @@
  * this module must also be embedded in the initramfs to have any chance
  * of registering before i915 binds -- see the design spec.
  *
- * STATUS: untested prototype. Gated behind the "active" module parameter
- * (default off / dry-run) until validated on real hardware -- see
+ * STATUS: validated on real hardware -- three consecutive full cold boots
+ * with active=1 all reproduced the actual DSI panel-init bug and cleared
+ * it automatically, with no crashes and no visible corruption. See
+ * docs/findings.md, finding 11, for the full log evidence. Still gated
+ * behind the "active" module parameter (default off / dry-run) -- see
  * kernel/minibook-dsi-reinit/README.md.
  */
 
@@ -86,8 +89,9 @@ static void reinit_work_fn(struct work_struct *work)
 			"(leaving GPU unbound; manual sleep/wake or a "
 			"reboot is still available as fallback)\n", ret);
 	} else if (ret == 0) {
-		dev_err(&pdev->dev,
-			"no driver claimed the GPU after forced release\n");
+		dev_warn(&pdev->dev,
+			 "device_attach() returned 0 (no synchronous match; "
+			 "an async probe may still be pending)\n");
 	} else {
 		dev_info(&pdev->dev, "reprobe complete\n");
 	}
@@ -105,6 +109,11 @@ static void schedule_dsi_reinit_once(const char *reason)
 
 	pr_info("scheduling DSI reinit in %d ms (%s)\n",
 		MINIBOOK_DSI_REINIT_DELAY_MS, reason);
+	/* Deliberately the shared system_wq, not a private workqueue.
+	 * device_release_driver() on a GPU is heavy and occupies a shared
+	 * worker for ~600ms; a private workqueue would remove a theoretical
+	 * self-flush-deadlock class, but that wasn't judged necessary given
+	 * 3 clean validated boots on system_wq. Known, accepted tradeoff. */
 	schedule_delayed_work(&reinit_work,
 			      msecs_to_jiffies(MINIBOOK_DSI_REINIT_DELAY_MS));
 }
