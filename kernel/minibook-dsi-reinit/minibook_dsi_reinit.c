@@ -58,6 +58,7 @@ static struct delayed_work reinit_work;
 static void reinit_work_fn(struct work_struct *work)
 {
 	struct pci_dev *pdev;
+	int ret;
 
 	pdev = pci_get_device(MINIBOOK_DSI_VENDOR_ID, MINIBOOK_DSI_DEVICE_ID,
 			       NULL);
@@ -66,9 +67,31 @@ static void reinit_work_fn(struct work_struct *work)
 		return;
 	}
 
+	if (!active) {
+		dev_info(&pdev->dev,
+			 "dry run: would force device_release_driver + "
+			 "device_attach now (active=0)\n");
+		pci_dev_put(pdev);
+		return;
+	}
+
 	dev_info(&pdev->dev,
-		 "dry run: would force device_release_driver + "
-		 "device_attach now (active=%d)\n", active);
+		 "forcing driver reprobe to clear DSI init race\n");
+	device_release_driver(&pdev->dev);
+
+	ret = device_attach(&pdev->dev);
+	if (ret < 0) {
+		dev_err(&pdev->dev,
+			"device_attach failed after forced release: %d "
+			"(leaving GPU unbound; manual sleep/wake or a "
+			"reboot is still available as fallback)\n", ret);
+	} else if (ret == 0) {
+		dev_err(&pdev->dev,
+			"no driver claimed the GPU after forced release\n");
+	} else {
+		dev_info(&pdev->dev, "reprobe complete\n");
+	}
+
 	pci_dev_put(pdev);
 }
 
