@@ -2,6 +2,7 @@
 docs/superpowers/
 .superpowers/
 daemon/target/
+dsi-blank-retry/target/
 kernel/minibook-lid-wake/*.o
 kernel/minibook-lid-wake/*.ko
 kernel/minibook-lid-wake/*.mod

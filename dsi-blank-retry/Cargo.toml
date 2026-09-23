@@ -1,0 +1,8 @@
+[package]
+name = "dsi-blank-retry"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "dsi-blank-retry"
+path = "src/main.rs"
