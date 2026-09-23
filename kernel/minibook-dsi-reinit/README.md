@@ -8,9 +8,9 @@ has always cleared the corruption by hand; this module automates that
 same recovery via `device_release_driver()`/`device_attach()` on the GPU
 device, rather than patching `i915`'s internal (unexported) DSI init
 code. See
-[`docs/findings.md`](../../docs/findings.md) and the design spec at
-[`docs/superpowers/specs/2026-09-19-dsi-reinit-fix-design.md`](../../docs/superpowers/specs/2026-09-19-dsi-reinit-fix-design.md)
-for the full root-cause evidence and rationale.
+[`docs/findings.md`](../../docs/findings.md) for the full root-cause
+evidence and rationale (the original design spec this was built from is
+local process scaffolding, not published).
 
 ## Hardware/software baseline
 

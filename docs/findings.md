@@ -623,9 +623,7 @@ noticing corruption and intervening by hand. A one-shot guard (an atomic
 compare-and-swap) prevents the module's own forced rebind from
 re-triggering itself. Gated behind an `active` module parameter (default
 off) so the trigger logic could be validated via logging alone before the
-real action was ever enabled; see
-[`docs/superpowers/specs/2026-09-19-dsi-reinit-fix-design.md`](superpowers/specs/2026-09-19-dsi-reinit-fix-design.md)
-for the full design rationale.
+real action was ever enabled.
 
 **A note on how this was validated**: an initial attempt to validate the
 mechanism by manually unbinding `i915` via sysfs against the live,
