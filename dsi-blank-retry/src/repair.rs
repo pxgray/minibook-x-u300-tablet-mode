@@ -1,7 +1,7 @@
 use std::io;
 use std::process::Command;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 // Same problem daemon/src/display.rs already solves: this binary runs as
 // root (see systemd/dsi-blank-retry.service), but Mutter's DisplayConfig
@@ -68,7 +68,9 @@ pub enum RepairOutcome {
     /// toggle; treated as cleared.
     Cleared { attempts: u32 },
     /// All 5 attempts were tried and a new DSI error kept appearing (or
-    /// the toggle command kept failing) every time.
+    /// the toggle command kept failing) every time. Also returned, with
+    /// fewer than 5 attempts, if the channel disconnects (the watch thread
+    /// died).
     GaveUp { attempts: u32 },
 }
 
@@ -83,24 +85,40 @@ where
     F: Fn() -> bool,
 {
     for attempt in 1..=MAX_ATTEMPTS {
-        if !toggle() {
-            // Treat a failed command the same as "didn't clear it".
-            std::thread::sleep(wait);
-            continue;
+        // Discard stale events (kernel DSI failures arrive in bursts) so
+        // only errors emitted from here on count. Drained BEFORE the
+        // toggle so errors caused by the toggle itself are still seen.
+        drain(rx);
+        let started = Instant::now();
+        // A failed toggle command counts the same as "didn't clear it".
+        if toggle() {
+            match rx.recv_timeout(wait) {
+                // A new error arrived during the window: not cleared yet.
+                Ok(()) => {}
+                Err(RecvTimeoutError::Timeout) => {
+                    return RepairOutcome::Cleared { attempts: attempt };
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    drain(rx);
+                    return RepairOutcome::GaveUp { attempts: attempt };
+                }
+            }
         }
-        match rx.recv_timeout(wait) {
-            Ok(()) => continue, // a new error arrived during the window: not cleared yet
-            Err(RecvTimeoutError::Timeout) => {
-                return RepairOutcome::Cleared { attempts: attempt };
-            }
-            Err(RecvTimeoutError::Disconnected) => {
-                return RepairOutcome::GaveUp { attempts: attempt };
-            }
+        // Space attempts about `wait` apart; no pointless sleep after the
+        // final attempt.
+        if attempt < MAX_ATTEMPTS {
+            std::thread::sleep(wait.saturating_sub(started.elapsed()));
         }
     }
+    // Leftover events must not make the caller start another cycle at once.
+    drain(rx);
     RepairOutcome::GaveUp {
         attempts: MAX_ATTEMPTS,
     }
+}
+
+fn drain(rx: &Receiver<()>) {
+    while rx.try_recv().is_ok() {}
 }
 
 /// Production entry point: real toggle via set_power_save_mode, real 2s
@@ -113,7 +131,13 @@ pub fn attempt_repair(rx: &Receiver<()>, active: bool) -> RepairOutcome {
     }
     attempt_repair_with(
         rx,
-        || set_power_save_mode(POWER_SAVE_OFF).is_ok() && set_power_save_mode(POWER_SAVE_ON).is_ok(),
+        || {
+            // No short-circuit: "on" is always attempted so a failed or
+            // partial toggle can never leave the panel blanked.
+            let off = set_power_save_mode(POWER_SAVE_OFF);
+            let on = set_power_save_mode(POWER_SAVE_ON);
+            off.is_ok() && on.is_ok()
+        },
         Duration::from_secs(2),
     )
 }
@@ -149,8 +173,7 @@ mod tests {
         assert_eq!(args.last().unwrap(), "0");
     }
 
-    use std::sync::mpsc;
-    use std::time::Duration;
+    use std::sync::mpsc::{self, TryRecvError};
 
     #[test]
     fn dry_run_returns_dry_run_and_leaves_channel_untouched() {
@@ -210,5 +233,35 @@ mod tests {
         };
         let outcome = attempt_repair_with(&rx, toggle, Duration::from_millis(10));
         assert_eq!(outcome, RepairOutcome::Cleared { attempts: 3 });
+    }
+
+    #[test]
+    fn stale_queued_events_do_not_count_as_new_errors() {
+        let (tx, rx) = mpsc::channel();
+        for _ in 0..3 {
+            tx.send(()).unwrap();
+        }
+        let outcome = attempt_repair_with(&rx, || true, Duration::from_millis(10));
+        assert_eq!(outcome, RepairOutcome::Cleared { attempts: 1 });
+    }
+
+    #[test]
+    fn gave_up_leaves_the_channel_drained() {
+        let (tx, rx) = mpsc::channel();
+        let toggle = || {
+            let _ = tx.send(());
+            true
+        };
+        let outcome = attempt_repair_with(&rx, toggle, Duration::from_millis(10));
+        assert_eq!(outcome, RepairOutcome::GaveUp { attempts: 5 });
+        assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));
+    }
+
+    #[test]
+    fn disconnected_channel_gives_up_early() {
+        let (tx, rx) = mpsc::channel::<()>();
+        drop(tx);
+        let outcome = attempt_repair_with(&rx, || true, Duration::from_millis(10));
+        assert_eq!(outcome, RepairOutcome::GaveUp { attempts: 1 });
     }
 }
