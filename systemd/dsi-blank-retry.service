@@ -1,0 +1,13 @@
+[Unit]
+Description=Retry GNOME idle-blank PowerSaveMode toggle on DSI panel corruption
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/dsi-blank-retry
+Restart=on-failure
+RestartSec=2
+Environment=DSI_BLANK_RETRY_ACTIVE=0
+
+[Install]
+WantedBy=multi-user.target
