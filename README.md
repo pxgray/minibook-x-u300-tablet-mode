@@ -168,7 +168,30 @@ before enabling `active=1`), and
 and its validation status (three consecutive clean cold boots; longer-term
 soak testing still open).
 
-**7. Verify:** fold the hinge into a Tablet-range position (see the
+**7. (Optional) Install the dsi-blank-retry daemon:** also unrelated to
+`minibookd` itself, but fixes the same DSI panel corruption when it
+appears after GNOME's idle screen-blank rather than at boot (which
+`minibook-dsi-reinit` cannot cover). It is a small Rust service run as
+root, so build and install it separately from `minibookd`:
+
+```sh
+cd dsi-blank-retry
+cargo build --release
+cd ..
+sudo install -Dm755 dsi-blank-retry/target/release/dsi-blank-retry /usr/local/bin/dsi-blank-retry
+sudo cp systemd/dsi-blank-retry.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now dsi-blank-retry
+```
+
+It starts in detect-and-log-only mode; see
+[`dsi-blank-retry/README.md`](dsi-blank-retry/) for enabling the real
+repair, and [`docs/findings.md`](docs/findings.md), finding 12, for why
+it's needed and its validation status (9 of 9 induced failures cleared
+on the first retry; a natural idle-blank hasn't yet been observed with
+it running).
+
+**8. Verify:** fold the hinge into a Tablet-range position (see the
 Laptop/Tablet ranges in [`docs/findings.md`](docs/findings.md), finding 5)
 and confirm the keyboard/touchpad disable and check `journalctl -u
 minibookd` for the transition log line.
@@ -238,6 +261,16 @@ baseline it was tested against, are in [`docs/findings.md`](docs/findings.md).
     the actual bug and clearing it automatically (under a second from
     failure to fixed) with no visible corruption; longer-term soak
     testing still open.
+12. The same DSI failure also occurs at runtime after GNOME's idle
+    screen-blank (it never coincides with a real suspend/resume; GNOME
+    toggling Mutter's `PowerSaveMode` reproduces it in roughly a third of
+    cycles), which the boot-time module cannot fix. Fixed by
+    [`dsi-blank-retry/`](dsi-blank-retry/), a small root service that
+    watches `/dev/kmsg` and retries the same `PowerSaveMode` toggle until
+    the error stops. In 20 induced blank/unblank cycles, 9 failures were
+    detected and every one cleared on the first retry with no corruption
+    visible on screen; validated only against the induced trigger so far,
+    not a natural idle-blank.
 
 ## Contributing
 

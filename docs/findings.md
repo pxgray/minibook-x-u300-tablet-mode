@@ -681,3 +681,98 @@ is still open. The bug's underlying trigger condition (why the DSI link
 fails on the first probe at all) remains unknown -- this fix treats the
 symptom the same way the manual sleep/wake workaround always has, not
 the root timing/hardware cause.
+
+### 12. The same DSI failure also occurs at runtime, after GNOME's idle screen-blank; fixed with a userspace retry daemon
+
+**Symptom**: the same garbled/split panel corruption as finding 11, but
+appearing well after boot, when the screen comes back from GNOME's idle
+blank. It cleared after one or a few more blank/unblank (or sleep/wake)
+cycles, but `minibook-dsi-reinit` never helped: its trigger is a one-shot
+guard on the single `i915` bind event at boot, so it cannot fire again.
+The user confirmed none of the occurrences coincided with a lid close.
+
+**What it is not, from the kernel log**: three natural occurrences were
+logged (`2026-09-22 16:41:39`, `2026-09-23 07:08:30`, `2026-09-23
+07:11:09`), each a `[drm] *ERROR* DSI link not ready` that did not
+follow a resume: the nearest earlier resume was over an hour before the
+first and 13 and 16 minutes before the two morning events; the suspends
+that followed were the user's own manual fix, triggered a few seconds
+(first and third event) or about three minutes (second) later. Across
+the boot's five genuine
+ACPI S3 resumes (`16:49:53`, `19:18:25`, `19:39:55`, `06:55:09`,
+`07:11:23`) none produced a DSI error. This unit's GNOME power settings
+never suspend on idle on AC (`sleep-inactive-ac-type` is `'nothing'`);
+idle only blanks the display.
+
+**What the trigger is**: `gnome-shell` logs `Failed to make thread 'KMS
+thread' high priority scheduled: ...NameHasNoOwner` (harmless in itself:
+`rtkit-daemon` is not installed on this unit) every time Mutter
+recreates its KMS thread, which happens on every blank/unblank. It
+appeared 62 times in the boot studied, so on its own it is not a
+discriminator, but all three DSI errors sat next to such a burst. The
+decisive test: Mutter's `org.gnome.Mutter.DisplayConfig` `PowerSaveMode`
+property (readwrite `int32`, `0` on, `3` off) is what GNOME's idle
+daemon flips. Setting it off then on by hand
+(`busctl --address unix:path=/run/user/1000/bus call
+org.gnome.Mutter.DisplayConfig /org/gnome/Mutter/DisplayConfig
+org.freedesktop.DBus.Properties Set ssv org.gnome.Mutter.DisplayConfig
+PowerSaveMode i 3`, then `i 0`) reproduces the same `KMS thread` log
+signature, and, repeated in a loop (1s off, 1.5s on, 30 cycles),
+reproduces the failure itself in roughly a third of cycles (11 and 10
+`DSI link not ready` lines in two separate 30-cycle runs). Each failure
+logs three lines together:
+
+```
+i915 0000:00:02.0: [drm] *ERROR* DSI link not ready
+i915 0000:00:02.0: [drm] *ERROR* DSI payload credits not released
+i915 0000:00:02.0: [drm] *ERROR* DSI send packet failed with -EBUSY
+```
+
+Confirmed by the user watching the screen during the loop: doing another
+`PowerSaveMode` cycle clears the corruption, usually on the next cycle,
+sometimes taking a couple. This is a re-run of the panel's enable
+sequence, the same kind of recovery finding 11 relies on, through a path
+that is safe with a compositor attached (unlike an `i915` unbind: see
+finding 11's validation note).
+
+**Fix**: [`dsi-blank-retry/`](../dsi-blank-retry/), a small std-only Rust
+daemon run as a root systemd service. It reads `/dev/kmsg` (which needs
+root: `dmesg_restrict` is 1 on this unit) for `DSI link not ready`, and
+on a match toggles `PowerSaveMode` off then on as the desktop user (via
+`runuser -u pxgray -- busctl`, the same workaround `minibookd` already
+uses because the session bus rejects root), then watches for a fresh
+error for 2 seconds. A new error means it did not clear, so it retries;
+it gives up after 5 attempts and logs a warning, never retrying
+forever. Errors already queued from the same burst are discarded before
+each attempt so they cannot burn attempts. Gated behind
+`DSI_BLANK_RETRY_ACTIVE` (default off: detect and log only).
+
+**Validated on real hardware** (2026-09-23), using the loop above as a
+repeatable trigger:
+
+- *Startup*: the ring buffer still held 2 historical `DSI link not ready`
+  lines (`sudo dmesg`); the freshly started daemon logged no detections,
+  so its seek-to-end of `/dev/kmsg` works on the real device.
+- *Dry-run detection*: 30 cycles produced 10 kernel `DSI link not ready`
+  lines and exactly 10 daemon detections (each logged `dry-run, not
+  repairing`), no misses or extras.
+- *Live repair*: with the action enabled, 20 cycles (13s apart, so a
+  repair never overlapped the next test toggle) produced 9 kernel errors,
+  9 detections, 9 outcomes `cleared after 1 attempt(s)`, and 0 `gave up`.
+  All 9 repairs ran the full `runuser` path as root with no `busctl`
+  failure; each took about 2.7s from detection to the `cleared` log line.
+  The user watched the screen throughout and never saw the corruption,
+  compared with visible corruption in roughly half the unrepaired loop's
+  cycles; on some cycles the screen stayed black a little longer, which
+  is the repair's own blank/unblank.
+
+**Caveats, only partially tested**: the trigger in every test was the
+`PowerSaveMode` loop, not a natural idle-blank (which is the case that
+matters day to day and has not yet been seen with the daemon running),
+and a 1-second blank is a harsher trigger than a real idle blank. Every
+live repair cleared on its first attempt, so the retry-up-to-5 path is
+covered by unit tests but has not run on hardware. "Cleared" is the
+daemon's own criterion (no new error within 2 seconds), corroborated
+here only by the user's report of nothing visibly wrong. Nine events in
+one session is a small sample. The underlying reason the panel fails to
+retrain is still unknown; this only retries it.

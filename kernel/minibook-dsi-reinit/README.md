@@ -12,6 +12,12 @@ code. See
 evidence and rationale (the original design spec this was built from is
 local process scaffolding, not published).
 
+This module only covers the boot-time case: its trigger is a one-shot
+guard on `i915`'s single bind event per boot. The same failure also
+occurs later, when GNOME's idle screen-blank comes back; that is handled
+by [`dsi-blank-retry/`](../../dsi-blank-retry/) (see `docs/findings.md`,
+finding 12).
+
 ## Hardware/software baseline
 
 Built and validated only against this repo's one documented unit: GPU PCI
