@@ -32,11 +32,27 @@ pub trait KmsgSource {
     fn next_record(&mut self) -> io::Result<String>;
 }
 
+/// Reads one record from `reader`. Retries on Interrupted (EINTR) and
+/// BrokenPipe (std's mapping of EPIPE, which /dev/kmsg returns once when
+/// the reader was overrun; the next read resumes at the oldest available
+/// record), so neither ends the watch loop. A 0-byte read is treated as
+/// EOF: real /dev/kmsg never returns 0 in blocking mode, so this only
+/// stops watch from busy-spinning on a source that truly ended.
+fn read_record_from<R: Read>(reader: &mut R) -> io::Result<String> {
+    let mut buf = [0u8; 8192];
+    loop {
+        match reader.read(&mut buf) {
+            Ok(0) => return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "kmsg source returned 0 bytes")),
+            Ok(n) => return Ok(String::from_utf8_lossy(&buf[..n]).into_owned()),
+            Err(e) if e.kind() == io::ErrorKind::Interrupted || e.kind() == io::ErrorKind::BrokenPipe => continue,
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 impl KmsgSource for std::fs::File {
     fn next_record(&mut self) -> io::Result<String> {
-        let mut buf = [0u8; 8192];
-        let n = self.read(&mut buf)?;
-        Ok(String::from_utf8_lossy(&buf[..n]).into_owned())
+        read_record_from(self)
     }
 }
 
@@ -114,6 +130,72 @@ mod tests {
         }
     }
 
+    struct FakeRead {
+        results: VecDeque<io::Result<Vec<u8>>>,
+    }
+
+    impl Read for FakeRead {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            match self.results.pop_front() {
+                Some(Ok(data)) => {
+                    let n = data.len().min(buf.len());
+                    buf[..n].copy_from_slice(&data[..n]);
+                    Ok(n)
+                }
+                Some(Err(e)) => Err(e),
+                None => Ok(0),
+            }
+        }
+    }
+
+    #[test]
+    fn read_record_from_retries_on_interrupted() {
+        let mut fake = FakeRead {
+            results: VecDeque::from(vec![
+                Err(io::Error::new(io::ErrorKind::Interrupted, "EINTR")),
+                Ok(b"test data".to_vec()),
+            ]),
+        };
+        let result = read_record_from(&mut fake);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "test data");
+    }
+
+    #[test]
+    fn read_record_from_retries_on_broken_pipe() {
+        let mut fake = FakeRead {
+            results: VecDeque::from(vec![
+                Err(io::Error::new(io::ErrorKind::BrokenPipe, "EPIPE")),
+                Ok(b"test data".to_vec()),
+            ]),
+        };
+        let result = read_record_from(&mut fake);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "test data");
+    }
+
+    #[test]
+    fn read_record_from_treats_zero_byte_read_as_eof() {
+        let mut fake = FakeRead {
+            results: VecDeque::from(vec![Ok(vec![])]),
+        };
+        let result = read_record_from(&mut fake);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn read_record_from_propagates_other_errors() {
+        let mut fake = FakeRead {
+            results: VecDeque::from(vec![
+                Err(io::Error::new(io::ErrorKind::PermissionDenied, "access denied")),
+            ]),
+        };
+        let result = read_record_from(&mut fake);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+    }
+
     #[test]
     fn watch_sends_only_on_matching_records() {
         let mut fake = FakeKmsg {
@@ -128,6 +210,11 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let result = watch(&mut fake, &tx);
         assert!(result.is_err(), "watch should end when the fake source errors");
+        assert_eq!(
+            result.unwrap_err().kind(),
+            io::ErrorKind::UnexpectedEof,
+            "watch should end with UnexpectedEof when source exhausted"
+        );
         let received: Vec<()> = rx.try_iter().collect();
         assert_eq!(
             received.len(),
