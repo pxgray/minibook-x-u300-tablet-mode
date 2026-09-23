@@ -4,8 +4,7 @@
  * full driver remove+probe cycle as early in boot as possible, to work
  * around an intermittent DSI panel-init failure ("[drm] *ERROR* DSI link
  * not ready") confirmed on this exact unit at kernel 7.2.6-1-cachyos --
- * see docs/findings.md and
- * docs/superpowers/specs/2026-09-19-dsi-reinit-fix-design.md.
+ * see docs/findings.md.
  *
  * A shallow sleep/wake cycle has always cleared the corruption by hand;
  * dmesg shows a GuC/HuC firmware reload and full re-bind ~20s after the

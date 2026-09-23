@@ -694,15 +694,20 @@ The user confirmed none of the occurrences coincided with a lid close.
 **What it is not, from the kernel log**: three natural occurrences were
 logged (`2026-09-22 16:41:39`, `2026-09-23 07:08:30`, `2026-09-23
 07:11:09`), each a `[drm] *ERROR* DSI link not ready` that did not
-follow a resume: the nearest earlier resume was over an hour before the
-first and 13 and 16 minutes before the two morning events; the suspends
-that followed were the user's own manual fix, triggered a few seconds
-(first and third event) or about three minutes (second) later. Across
-the boot's five genuine
-ACPI S3 resumes (`16:49:53`, `19:18:25`, `19:39:55`, `06:55:09`,
-`07:11:23`) none produced a DSI error. This unit's GNOME power settings
-never suspend on idle on AC (`sleep-inactive-ac-type` is `'nothing'`);
-idle only blanks the display.
+follow a resume: there was no earlier resume in that boot before the
+first, the nearest earlier resume to the two morning events was 13 and
+16 minutes before, and the suspends that followed were the user's own
+manual fix, triggered a few seconds (first and third event) or about
+three minutes (second) later. Four more such errors were logged later
+that morning (`08:10:08`, `08:29:02`, `08:35:37`, `09:05:04`, the last
+followed by a manual-looking suspend four seconds later and a clean
+resume); whether those were natural idle-blanks or deliberate tests was
+not recorded, so they are not counted above. Across that boot's nine
+genuine ACPI S3 resumes (`16:49:53`, `19:18:25`, `19:39:55`, `06:55:09`,
+`07:11:23`, `09:05:14`, `11:11:40`, `13:15:33`, `14:36:44`) none produced
+a DSI error. This unit's GNOME power settings never suspend on idle on
+AC (`sleep-inactive-ac-type` is `'nothing'`); idle only blanks the
+display.
 
 **What the trigger is**: `gnome-shell` logs `Failed to make thread 'KMS
 thread' high priority scheduled: ...NameHasNoOwner` (harmless in itself:
@@ -761,9 +766,10 @@ repeatable trigger:
   9 detections, 9 outcomes `cleared after 1 attempt(s)`, and 0 `gave up`.
   All 9 repairs ran the full `runuser` path as root with no `busctl`
   failure; each took about 2.7s from detection to the `cleared` log line.
-  The user watched the screen throughout and never saw the corruption,
-  compared with visible corruption in roughly half the unrepaired loop's
-  cycles; on some cycles the screen stayed black a little longer, which
+  The user watched the screen throughout and never saw the corruption
+  (in the earlier unrepaired loop the user had reported seeing it in
+  about half of the cycles, a rough estimate; the kernel log counted
+  errors in about a third); on some cycles the screen stayed black a little longer, which
   is the repair's own blank/unblank.
 
 **Caveats, only partially tested**: the trigger in every test was the

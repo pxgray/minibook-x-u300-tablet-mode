@@ -17,13 +17,17 @@ including the Tablet-to-Laptop screen-rotation reset.
 
 This project was built in an interactive session with Claude (Anthropic's
 Claude Sonnet 5, via Claude Code): Claude disassembled the DSDT, proposed
-the architecture, and wrote the scripts and the daemon in
-[`daemon/`](daemon/) (an agentic multi-pass implement-and-review process,
-with separate implementer and reviewer passes cross-checking each other's
-work). Every command that touched live hardware, and every result that
-required physical observation (keyboard/touchpad response, hinge
-position, screen orientation), was run and confirmed by the repo owner on
-their own machine. This README and [`docs/findings.md`](docs/findings.md)
+the architecture, and wrote the scripts, the daemon in
+[`daemon/`](daemon/), and the two DSI-corruption fixes
+([`kernel/minibook-dsi-reinit/`](kernel/minibook-dsi-reinit/) and
+[`dsi-blank-retry/`](dsi-blank-retry/)) (an agentic multi-pass
+implement-and-review process, with separate implementer and reviewer
+passes cross-checking each other's work). Every command that touched live
+hardware was run either by the repo owner or by Claude with the owner's
+go-ahead while the owner watched, on their own machine, and every result
+that required physical observation (keyboard/touchpad response, hinge
+position, screen orientation, whether screen corruption appeared) was
+observed and confirmed by the repo owner. This README and [`docs/findings.md`](docs/findings.md)
 were drafted by Claude from the session's findings and edited by the repo
 owner before publishing. Nothing here is AI speculation presented as fact
 without a corresponding test recorded in

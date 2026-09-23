@@ -16,16 +16,17 @@ pub fn extract_message(raw: &str) -> &str {
 
 /// Matches only the primary DSI failure line, not the two lines that
 /// accompany it in the same burst (DSI payload credits not released,
-/// DSI send packet failed with -EBUSY) -- see this plan's Global
-/// Constraints for why.
+/// DSI send packet failed with -EBUSY). Those two always arrive together
+/// with this one, so matching them too would count one failure three
+/// times.
 pub fn is_dsi_error(message: &str) -> bool {
     message.contains("DSI link not ready")
 }
 
 /// Abstracts over "the next raw /dev/kmsg record" so the watch loop's
 /// logic can be tested without root or a real /dev/kmsg (which this
-/// unit's dmesg_restrict=1 blocks for non-root reads anyway -- see the
-/// design spec's empirical baseline). A real read(2) on /dev/kmsg
+/// unit's dmesg_restrict=1 blocks for non-root reads anyway: a non-root
+/// read fails with Operation not permitted). A real read(2) on /dev/kmsg
 /// returns exactly one record per call; next_record mirrors that
 /// contract.
 pub trait KmsgSource {

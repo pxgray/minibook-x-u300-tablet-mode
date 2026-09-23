@@ -45,7 +45,7 @@ pub fn power_save_toggle_args(state: i32) -> Vec<String> {
 }
 
 /// Runs the toggle as TARGET_USER via runuser, since this process itself
-/// runs as root (see module doc comment above).
+/// runs as root (see the comment on TARGET_USER).
 pub fn set_power_save_mode(state: i32) -> io::Result<()> {
     let status = Command::new("runuser")
         .args(["-u", TARGET_USER, "--", "busctl"])
