@@ -16,7 +16,7 @@
  *
  * i915 loads from the initramfs on this unit's mkinitcpio "kms" hook, so
  * this module must also be embedded in the initramfs to have any chance
- * of registering before i915 binds -- see the design spec.
+ * of registering before i915 binds -- see docs/findings.md, finding 11.
  *
  * STATUS: validated on real hardware -- three consecutive full cold boots
  * with active=1 all reproduced the actual DSI panel-init bug and cleared

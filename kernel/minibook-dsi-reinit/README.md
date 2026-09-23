@@ -9,8 +9,7 @@ same recovery via `device_release_driver()`/`device_attach()` on the GPU
 device, rather than patching `i915`'s internal (unexported) DSI init
 code. See
 [`docs/findings.md`](../../docs/findings.md) for the full root-cause
-evidence and rationale (the original design spec this was built from is
-local process scaffolding, not published).
+evidence and rationale.
 
 This module only covers the boot-time case: its trigger is a one-shot
 guard on `i915`'s single bind event per boot. The same failure also
