@@ -1,33 +1,69 @@
 use std::io;
+use std::os::unix::fs::MetadataExt;
 use std::process::Command;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 // Same problem daemon/src/display.rs already solves: this binary runs as
 // root (see systemd/dsi-blank-retry.service), but Mutter's DisplayConfig
-// interface lives on the logged-in user's session bus, which
+// interface lives on the session bus of whoever owns the display, which
 // authenticates by real uid (SO_PEERCRED) and rejects root outright even
-// when pointed at the right socket. runuser -u drops to that user's uid
-// before exec'ing busctl, which is what actually lets the session bus
-// authenticate the connection -- see daemon/src/display.rs for the same
-// pattern.
-const TARGET_USER: &str = "pxgray";
-const SESSION_BUS_ADDRESS: &str = "unix:path=/run/user/1000/bus";
+// when pointed at the right socket. So busctl must run as that user.
+//
+// That user is not always the desktop user: at boot, before login, it's
+// GDM's greeter, a dynamic user (gdm-greeter) that only exists while the
+// greeter runs. setpriv takes a numeric uid/gid and needs no passwd
+// entry, unlike runuser -u, so the target is resolved fresh from logind
+// on every attempt (a login between attempts changes it).
+const SEAT: &str = "seat0";
 
 // DPMS-style encoding used by org.gnome.Mutter.DisplayConfig's
 // PowerSaveMode property, confirmed live: 0 = on, 3 = off.
 pub const POWER_SAVE_OFF: i32 = 3;
 pub const POWER_SAVE_ON: i32 = 0;
 
+/// Parses `loginctl show-* --property=X --value` output; None when the
+/// property is empty (e.g. no active session on the seat).
+pub fn parse_loginctl_value(output: &str) -> Option<String> {
+    let value = output.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn loginctl_value(args: &[&str]) -> io::Result<String> {
+    let output = Command::new("loginctl").args(args).output()?;
+    if !output.status.success() {
+        return Err(io::Error::other(format!(
+            "loginctl {args:?} exited with {}",
+            output.status
+        )));
+    }
+    parse_loginctl_value(&String::from_utf8_lossy(&output.stdout))
+        .ok_or_else(|| io::Error::other(format!("loginctl {args:?} printed nothing")))
+}
+
+/// uid and gid of the user whose session is active on SEAT, i.e. whose
+/// compositor owns the panel. The gid comes from the owner of that
+/// user's runtime dir, which logind creates for every session user,
+/// dynamic ones included.
+pub fn display_owner() -> io::Result<(u32, u32)> {
+    let session = loginctl_value(&["show-seat", SEAT, "--property=ActiveSession", "--value"])?;
+    let uid: u32 = loginctl_value(&["show-session", &session, "--property=User", "--value"])?
+        .parse()
+        .map_err(io::Error::other)?;
+    let gid = std::fs::metadata(format!("/run/user/{uid}"))?.gid();
+    Ok((uid, gid))
+}
+
 /// Builds the busctl args (everything after "busctl" itself) for setting
-/// PowerSaveMode to `state`. Verified live for both POWER_SAVE_OFF and
-/// POWER_SAVE_ON: exits 0, no error output, and is the exact call
-/// confirmed to both reproduce and clear the DSI corruption during
-/// testing.
-pub fn power_save_toggle_args(state: i32) -> Vec<String> {
+/// PowerSaveMode to `state` on `uid`'s session bus. Verified live for
+/// both POWER_SAVE_OFF and POWER_SAVE_ON against the logged-in desktop
+/// user's bus: exits 0, no error output, and is the exact call confirmed
+/// to both reproduce and clear the DSI corruption during testing.
+pub fn power_save_toggle_args(state: i32, uid: u32) -> Vec<String> {
+    let address = format!("unix:path=/run/user/{uid}/bus");
     [
         "--address",
-        SESSION_BUS_ADDRESS,
+        &address,
         "call",
         "org.gnome.Mutter.DisplayConfig",
         "/org/gnome/Mutter/DisplayConfig",
@@ -44,18 +80,20 @@ pub fn power_save_toggle_args(state: i32) -> Vec<String> {
     .collect()
 }
 
-/// Runs the toggle as TARGET_USER via runuser, since this process itself
-/// runs as root (see the comment on TARGET_USER).
-pub fn set_power_save_mode(state: i32) -> io::Result<()> {
-    let status = Command::new("runuser")
-        .args(["-u", TARGET_USER, "--", "busctl"])
-        .args(power_save_toggle_args(state))
+/// Runs the toggle as `uid`/`gid` via setpriv, since this process itself
+/// runs as root (see the comment on SEAT).
+pub fn set_power_save_mode(state: i32, uid: u32, gid: u32) -> io::Result<()> {
+    let status = Command::new("setpriv")
+        .arg(format!("--reuid={uid}"))
+        .arg(format!("--regid={gid}"))
+        .args(["--clear-groups", "--", "busctl"])
+        .args(power_save_toggle_args(state, uid))
         .status()?;
     if status.success() {
         Ok(())
     } else {
         Err(io::Error::other(format!(
-            "runuser busctl exited with {status}"
+            "setpriv busctl exited with {status}"
         )))
     }
 }
@@ -132,10 +170,20 @@ pub fn attempt_repair(rx: &Receiver<()>, active: bool) -> RepairOutcome {
     attempt_repair_with(
         rx,
         || {
+            let (uid, gid) = match display_owner() {
+                Ok(owner) => owner,
+                Err(e) => {
+                    eprintln!("dsi-blank-retry: no display owner to repair as: {e}");
+                    return false;
+                }
+            };
             // No short-circuit: "on" is always attempted so a failed or
             // partial toggle can never leave the panel blanked.
-            let off = set_power_save_mode(POWER_SAVE_OFF);
-            let on = set_power_save_mode(POWER_SAVE_ON);
+            let off = set_power_save_mode(POWER_SAVE_OFF, uid, gid);
+            let on = set_power_save_mode(POWER_SAVE_ON, uid, gid);
+            if let Err(e) = off.as_ref().and(on.as_ref()) {
+                eprintln!("dsi-blank-retry: toggle as uid {uid} failed: {e}");
+            }
             off.is_ok() && on.is_ok()
         },
         Duration::from_secs(2),
@@ -147,9 +195,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parse_loginctl_value_trims_the_trailing_newline() {
+        assert_eq!(parse_loginctl_value("3\n"), Some("3".to_string()));
+    }
+
+    #[test]
+    fn parse_loginctl_value_rejects_empty_output() {
+        // What show-seat prints when seat0 has no active session.
+        assert_eq!(parse_loginctl_value("\n"), None);
+        assert_eq!(parse_loginctl_value(""), None);
+    }
+
+    #[test]
+    fn power_save_toggle_args_use_the_given_users_bus() {
+        let args = power_save_toggle_args(POWER_SAVE_OFF, 60578);
+        assert_eq!(args[1], "unix:path=/run/user/60578/bus");
+    }
+
+    #[test]
     fn power_save_toggle_args_off_matches_the_verified_command() {
         assert_eq!(
-            power_save_toggle_args(POWER_SAVE_OFF),
+            power_save_toggle_args(POWER_SAVE_OFF, 1000),
             vec![
                 "--address",
                 "unix:path=/run/user/1000/bus",
@@ -169,7 +235,7 @@ mod tests {
 
     #[test]
     fn power_save_toggle_args_on_matches_the_verified_command() {
-        let args = power_save_toggle_args(POWER_SAVE_ON);
+        let args = power_save_toggle_args(POWER_SAVE_ON, 1000);
         assert_eq!(args.last().unwrap(), "0");
     }
 

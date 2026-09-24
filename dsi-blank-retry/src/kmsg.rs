@@ -23,6 +23,46 @@ pub fn is_dsi_error(message: &str) -> bool {
     message.contains("DSI link not ready")
 }
 
+/// Decides, from this boot's kernel messages logged before the daemon
+/// started, whether the panel was left corrupted. minibook-dsi-reinit's
+/// reprobe usually clears a boot-time failure, but its own re-enable
+/// fails too about 1 time in 3 (docs/findings.md, finding 11), and that
+/// failure lands before this service starts. A later "reprobe complete"
+/// or wake ("PM: suspend exit") re-enabled the panel, so only an error
+/// after the last of those counts. Messages are oldest first.
+pub fn needs_startup_repair<I, S>(messages: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut corrupted = false;
+    for message in messages {
+        let message = message.as_ref();
+        if is_dsi_error(message) {
+            corrupted = true;
+        } else if message.contains("reprobe complete") || message.contains("PM: suspend exit") {
+            corrupted = false;
+        }
+    }
+    corrupted
+}
+
+/// Reads every record already in the ring buffer from `reader`, which
+/// must be a /dev/kmsg fd opened with O_NONBLOCK: the read that would
+/// otherwise block for a new record fails with WouldBlock (EAGAIN) instead,
+/// which is how the end of the backlog is found. Returns messages only,
+/// metadata stripped, oldest first.
+pub fn read_backlog<R: Read>(reader: &mut R) -> io::Result<Vec<String>> {
+    let mut messages = Vec::new();
+    loop {
+        match read_record_from(reader) {
+            Ok(raw) => messages.push(extract_message(&raw).to_string()),
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(messages),
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 /// Abstracts over "the next raw /dev/kmsg record" so the watch loop's
 /// logic can be tested without root or a real /dev/kmsg (which this
 /// unit's dmesg_restrict=1 blocks for non-root reads anyway: a non-root
@@ -222,6 +262,64 @@ mod tests {
             2,
             "expected exactly 2 sends, one per 'DSI link not ready' record"
         );
+    }
+
+    const ERR: &str = "i915 0000:00:02.0: [drm] *ERROR* DSI link not ready";
+    const REPROBED: &str = "i915 0000:00:02.0: reprobe complete";
+    const WOKE: &str = "PM: suspend exit";
+
+    #[test]
+    fn startup_repair_not_needed_on_a_clean_boot() {
+        assert!(!needs_startup_repair(["i915 0000:00:02.0: [drm] GT0: GUC: RC enabled"]));
+    }
+
+    #[test]
+    fn startup_repair_not_needed_when_the_reprobe_followed_the_error() {
+        // The usual boot: first probe fails, minibook-dsi-reinit's
+        // reprobe clears it.
+        assert!(!needs_startup_repair([ERR, REPROBED]));
+    }
+
+    #[test]
+    fn startup_repair_needed_when_the_reprobe_itself_failed() {
+        // Seen on 3 boots: an error after "reprobe complete".
+        assert!(needs_startup_repair([ERR, REPROBED, ERR]));
+        assert!(needs_startup_repair([REPROBED, ERR]));
+    }
+
+    #[test]
+    fn startup_repair_needed_without_the_module() {
+        assert!(needs_startup_repair([ERR]));
+    }
+
+    #[test]
+    fn startup_repair_not_needed_after_a_wake_re_enabled_the_panel() {
+        assert!(!needs_startup_repair([REPROBED, ERR, WOKE]));
+        assert!(needs_startup_repair([REPROBED, ERR, WOKE, ERR]));
+    }
+
+    #[test]
+    fn read_backlog_stops_at_would_block_and_keeps_messages_only() {
+        let mut fake = FakeRead {
+            results: VecDeque::from(vec![
+                Ok(b"3,1,100,-;first".to_vec()),
+                Err(io::Error::new(io::ErrorKind::Interrupted, "EINTR")),
+                Ok(b"3,2,200,-;second".to_vec()),
+                Err(io::Error::new(io::ErrorKind::WouldBlock, "EAGAIN")),
+            ]),
+        };
+        assert_eq!(read_backlog(&mut fake).unwrap(), vec!["first", "second"]);
+    }
+
+    #[test]
+    fn read_backlog_propagates_other_errors() {
+        let mut fake = FakeRead {
+            results: VecDeque::from(vec![Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "access denied",
+            ))]),
+        };
+        assert!(read_backlog(&mut fake).is_err());
     }
 
     #[test]
