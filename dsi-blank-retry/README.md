@@ -2,7 +2,7 @@
 
 Userspace daemon that watches for the MiniBook X U300's runtime DSI panel
 corruption (`[drm] *ERROR* DSI link not ready`, appearing when GNOME's
-idle screen-blank comes back) and automatically retries GNOME's own
+idle screen-blank comes back, or left over from boot) and automatically retries GNOME's own
 `PowerSaveMode` toggle until it clears. This is the runtime counterpart to
 [`kernel/minibook-dsi-reinit/`](../kernel/minibook-dsi-reinit/), which
 fixes the same failure at boot: that module's trigger is a one-shot guard
@@ -14,13 +14,28 @@ this rests on.
 
 It runs as a root systemd service (reading `/dev/kmsg` needs `CAP_SYSLOG`;
 `dmesg_restrict` is 1 on this unit). On each `DSI link not ready` line it
-sets Mutter's `PowerSaveMode` off then on, as the desktop user via `runuser
--u pxgray -- busctl` (Mutter's `DisplayConfig` interface is on that user's
-session bus, which rejects root; `minibookd` uses the same workaround),
-then waits 2 seconds for a fresh error. A new error means it did not
-clear, so it retries; after 5 attempts it logs a warning and goes back to
-watching. It never retries forever. The user name and session bus path are
-hardcoded for this one unit.
+sets Mutter's `PowerSaveMode` off then on, then waits 2 seconds for a
+fresh error. A new error means it did not clear, so it retries; after 5
+attempts it logs a warning and goes back to watching. It never retries
+forever.
+
+The toggle runs as whoever owns the display: the user of `seat0`'s active
+logind session, looked up again on every attempt, via `setpriv
+--reuid=<uid> --regid=<gid> --clear-groups -- busctl` against
+`/run/user/<uid>/bus` (Mutter's `DisplayConfig` interface is on that
+user's session bus, which rejects root). Before login that is GDM's
+greeter, a dynamic user (`gdm-greeter`) with no permanent passwd entry,
+which is why it switches by numeric uid rather than `runuser -u <name>`.
+
+It also covers failures from before it started. At startup it reads the
+kernel log backlog and repairs straight away if the last `DSI link not
+ready` in it comes after the last `reprobe complete` (from
+`kernel/minibook-dsi-reinit/`) and the last `PM: suspend exit`, since
+either of those re-enables the panel. That catches the boots where the
+module's own reprobe fails (see `docs/findings.md`, finding 11), which
+happens a few seconds before this service starts. A restart mid-session
+can repeat a repair for an error that was already cleared, costing one
+extra blank/unblank.
 
 ## STATUS
 
@@ -30,6 +45,14 @@ enabled, all 9 detected failures cleared on the first attempt with no
 corruption visible on screen. The retry-up-to-5 path is covered by unit
 tests but has not been exercised on hardware, and nine events in one
 session is a small sample. See `docs/findings.md`, finding 12.
+
+The startup backlog repair through GDM's greeter session has worked on
+one real boot so far (2026-09-24 19:45). The reprobe failed at 5.3 s,
+the daemon started at 12.9 s, found the error and reported it cleared
+after 1 attempt at 15.2 s. The user saw the corruption clear once GDM
+started. Before that, the startup rule was replayed offline against the
+kernel logs of the 11 earlier boots in the journal. It flagged exactly
+the 5 boots left with an uncleared failure.
 
 Gated behind the `DSI_BLANK_RETRY_ACTIVE` environment variable: unset or
 anything other than `1` means detect-and-log only (the real toggle is

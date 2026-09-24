@@ -682,6 +682,35 @@ fails on the first probe at all) remains unknown -- this fix treats the
 symptom the same way the manual sleep/wake workaround always has, not
 the root timing/hardware cause.
 
+**Follow-up (2026-09-24): the reprobe's own panel enable sometimes fails
+too.** After three boots where the corruption was still on screen at
+login, a check of all 11 boots in the journal (`journalctl -k -b <n>`)
+found this:
+
+| | boots | `DSI link not ready` |
+|---|---|---|
+| First `i915` probe | 11 | 9 |
+| Module's reprobe (`active=1`) | 9 | 3 |
+
+On the three failing boots (2026-09-23 14:48, 2026-09-24 19:23 and
+19:34) the error came 0.76 to 0.86 s after `reprobe complete`, and
+nothing retried, since the module fires once and cannot see whether its
+reprobe worked. One in three matches the runtime `PowerSaveMode` loop's
+failure rate in finding 12. On the 19:34 boot the first probe had not
+failed at all, so the reprobe caused the corruption.
+
+One timing hypothesis was tested and ruled out. On the first two failing
+boots the module's delayed work ran about 185 ms late and reprobed
+within 1 ms of a first-probe failure, whereas every boot where the
+reprobe worked had a gap of 230 ms or more. A 500 ms settle sleep at the
+start of the work was tried on the 19:34 boot: the work ran only 12 ms
+late, no failure preceded it, and the reprobe still failed. The change
+was reverted.
+
+A failed reprobe is now handled by `dsi-blank-retry` (finding 12), which
+checks the kernel log backlog at startup. Confirmed on one boot so far;
+see the end of finding 12.
+
 ### 12. The same DSI failure also occurs at runtime, after GNOME's idle screen-blank; fixed with a userspace retry daemon
 
 **Symptom**: the same garbled/split panel corruption as finding 11, but
@@ -745,7 +774,8 @@ daemon run as a root systemd service. It reads `/dev/kmsg` (which needs
 root: `dmesg_restrict` is 1 on this unit) for `DSI link not ready`, and
 on a match toggles `PowerSaveMode` off then on as the desktop user (via
 `runuser -u pxgray -- busctl`, the same workaround `minibookd` already
-uses because the session bus rejects root), then watches for a fresh
+uses because the session bus rejects root; since replaced, see the
+2026-09-24 note at the end of this entry), then watches for a fresh
 error for 2 seconds. A new error means it did not clear, so it retries;
 it gives up after 5 attempts and logs a warning, never retrying
 forever. Errors already queued from the same burst are discarded before
@@ -782,3 +812,26 @@ daemon's own criterion (no new error within 2 seconds), corroborated
 here only by the user's report of nothing visibly wrong. Nine events in
 one session is a small sample. The underlying reason the panel fails to
 retrain is still unknown; this only retries it.
+
+**Extended 2026-09-24**: to cover the failed
+boot-time reprobes in finding 11's follow-up, the daemon now reads the
+kernel log backlog at startup. It repairs if the last `DSI link not
+ready` comes after both the last `reprobe complete` and the last `PM:
+suspend exit`. Replayed offline against the 11 boots in the journal,
+that rule flagged exactly the 5 boots left with an uncleared failure
+(the 3 failed reprobes and the 2 boots from before the module).
+At that point the display belongs to GDM's greeter, a dynamic user
+(`gdm-greeter`, uid 60578 on the boots checked), not the desktop user.
+So the toggle now targets `seat0`'s active logind session, resolved on
+every attempt, via `setpriv --reuid/--regid` rather than `runuser -u
+pxgray`.
+
+Validated on one real boot (2026-09-24 19:45): first probe failed at
+3.77 s, the reprobe completed at 4.41 s and failed again at 5.30 s, and
+the greeter session started at 10.75 s. The daemon started at 12.91 s,
+logged `DSI error from before startup was never cleared`, and at 15.22 s
+logged `cleared after 1 attempt(s)`, with no toggle or session-lookup
+errors. So the greeter's Mutter accepted the toggle through `setpriv`.
+The user saw the corruption on screen until GDM started, and then it
+cleared. One boot is a small sample. The corruption stays visible from
+the failed reprobe until the greeter is up, about 10 s on this boot.

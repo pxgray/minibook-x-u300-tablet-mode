@@ -264,7 +264,8 @@ baseline it was tested against, are in [`docs/findings.md`](docs/findings.md).
     working across three consecutive real cold boots, each reproducing
     the actual bug and clearing it automatically (under a second from
     failure to fixed) with no visible corruption; longer-term soak
-    testing still open.
+    testing still open. Later boots showed the reprobe's own panel enable
+    fails too, 3 times in 9, which the module cannot detect.
 12. The same DSI failure also occurs at runtime after GNOME's idle
     screen-blank (it never coincides with a real suspend/resume; GNOME
     toggling Mutter's `PowerSaveMode` reproduces it in roughly a third of
@@ -274,7 +275,9 @@ baseline it was tested against, are in [`docs/findings.md`](docs/findings.md).
     the error stops. In 20 induced blank/unblank cycles, 9 failures were
     detected and every one cleared on the first retry with no corruption
     visible on screen; validated only against the induced trigger so far,
-    not a natural idle-blank.
+    not a natural idle-blank. It now also repairs a failed boot-time
+    reprobe at startup, through GDM's greeter session (confirmed on one
+    boot so far).
 
 ## Contributing
 
