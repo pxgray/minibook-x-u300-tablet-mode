@@ -87,8 +87,7 @@ pub const HINGE_AXIS: (f64, f64, f64) = (-0.004605, 0.999986, 0.002757);
 /// Fixed rotation from base-referenced coordinates into the display
 /// sensor's own raw frame, as a unit quaternion (w, x, y, z). Fitted by
 /// scripts/calibrate_hinge_axis.py.
-pub const MOUNT_ROTATION: (f64, f64, f64, f64) =
-    (-0.816673, 0.007937, -0.576892, 0.013306);
+pub const MOUNT_ROTATION: (f64, f64, f64, f64) = (-0.816673, 0.007937, -0.576892, 0.013306);
 
 /// Signed, offset-corrected, tilt-corrected hinge angle in degrees, range
 /// (-180, 180]. Unlike `hinge_angle`, this corrects for each sensor's own
@@ -97,10 +96,7 @@ pub const MOUNT_ROTATION: (f64, f64, f64, f64) =
 /// offset-corrected base reading is too close to parallel with the hinge
 /// axis to define a stable reference direction in the perpendicular plane
 /// -- a degenerate orientation not expected in normal use.
-pub fn signed_hinge_angle(
-    base_raw: (f64, f64, f64),
-    display_raw: (f64, f64, f64),
-) -> Option<f64> {
+pub fn signed_hinge_angle(base_raw: (f64, f64, f64), display_raw: (f64, f64, f64)) -> Option<f64> {
     let u = normalize(sub3(base_raw, BASE_OFFSET));
     let w = normalize(sub3(display_raw, DISPLAY_OFFSET));
 
@@ -205,24 +201,114 @@ mod tests {
     #[test]
     fn signed_hinge_angle_matches_python_reference_for_all_readings() {
         let cases: &[(&str, (f64, f64, f64), (f64, f64, f64), f64)] = &[
-            ("typing_desk", (-3.0, 8.0, -1632.0), (-787.0, 36.0, 450.0), 57.98),
-            ("flat_open_desk", (13.0, 2.0, -1620.0), (3.0, 21.0, 809.0), 110.43),
-            ("folded_tablet_desk", (2.0, -6.0, 426.0), (3.0, 26.0, 793.0), -70.42),
-            ("reclined_typing_desk", (-3.0, -6.0, -1616.0), (-412.0, 31.0, 715.0), 84.60),
-            ("hand_held_tent", (320.0, 0.0, -1568.0), (351.0, 15.0, 729.0), 149.02),
-            ("self_standing_tent", (892.0, 19.0, -1067.0), (892.0, 0.0, 264.0), -124.31),
-            ("presentation_flipped", (18.0, 11.0, 437.0), (-964.0, 25.0, 122.0), -144.14),
-            ("lap_tilt_laying_down", (699.0, 16.0, -1460.0), (-969.0, -10.0, -297.0), 51.75),
-            ("lap_tilt_sitting_up", (-269.0, -14.0, -1636.0), (-490.0, -6.0, 679.0), 65.17),
-            ("lap_leaning_forward", (-341.0, 21.0, -1519.0), (-721.0, 37.0, 568.0), 45.10),
-            ("lap_reclined", (-51.0, 54.0, -1703.0), (-871.0, 65.0, 313.0), 46.36),
-            ("lap_laying_retake", (785.0, 24.0, -1272.0), (-950.0, 37.0, -446.0), 53.44),
-            ("lap_upright_fixed", (-61.0, 5.0, -1606.0), (-651.0, 50.0, 632.0), 67.28),
-            ("lap_partial_fixed", (441.0, 14.0, -1503.0), (-933.0, 26.0, 241.0), 69.87),
-            ("lap_full_fixed", (764.0, 2.0, -1355.0), (-971.0, 18.0, -319.0), 56.79),
-            ("lap_25pct", (199.0, 11.0, -1628.0), (-969.0, 38.0, 164.0), 50.01),
-            ("lap_50pct", (592.0, 25.0, -1479.0), (-996.0, 24.0, -315.0), 45.82),
-            ("lap_75pct", (837.0, 36.0, -1170.0), (-926.0, 44.0, -560.0), 53.11),
+            (
+                "typing_desk",
+                (-3.0, 8.0, -1632.0),
+                (-787.0, 36.0, 450.0),
+                57.98,
+            ),
+            (
+                "flat_open_desk",
+                (13.0, 2.0, -1620.0),
+                (3.0, 21.0, 809.0),
+                110.43,
+            ),
+            (
+                "folded_tablet_desk",
+                (2.0, -6.0, 426.0),
+                (3.0, 26.0, 793.0),
+                -70.42,
+            ),
+            (
+                "reclined_typing_desk",
+                (-3.0, -6.0, -1616.0),
+                (-412.0, 31.0, 715.0),
+                84.60,
+            ),
+            (
+                "hand_held_tent",
+                (320.0, 0.0, -1568.0),
+                (351.0, 15.0, 729.0),
+                149.02,
+            ),
+            (
+                "self_standing_tent",
+                (892.0, 19.0, -1067.0),
+                (892.0, 0.0, 264.0),
+                -124.31,
+            ),
+            (
+                "presentation_flipped",
+                (18.0, 11.0, 437.0),
+                (-964.0, 25.0, 122.0),
+                -144.14,
+            ),
+            (
+                "lap_tilt_laying_down",
+                (699.0, 16.0, -1460.0),
+                (-969.0, -10.0, -297.0),
+                51.75,
+            ),
+            (
+                "lap_tilt_sitting_up",
+                (-269.0, -14.0, -1636.0),
+                (-490.0, -6.0, 679.0),
+                65.17,
+            ),
+            (
+                "lap_leaning_forward",
+                (-341.0, 21.0, -1519.0),
+                (-721.0, 37.0, 568.0),
+                45.10,
+            ),
+            (
+                "lap_reclined",
+                (-51.0, 54.0, -1703.0),
+                (-871.0, 65.0, 313.0),
+                46.36,
+            ),
+            (
+                "lap_laying_retake",
+                (785.0, 24.0, -1272.0),
+                (-950.0, 37.0, -446.0),
+                53.44,
+            ),
+            (
+                "lap_upright_fixed",
+                (-61.0, 5.0, -1606.0),
+                (-651.0, 50.0, 632.0),
+                67.28,
+            ),
+            (
+                "lap_partial_fixed",
+                (441.0, 14.0, -1503.0),
+                (-933.0, 26.0, 241.0),
+                69.87,
+            ),
+            (
+                "lap_full_fixed",
+                (764.0, 2.0, -1355.0),
+                (-971.0, 18.0, -319.0),
+                56.79,
+            ),
+            (
+                "lap_25pct",
+                (199.0, 11.0, -1628.0),
+                (-969.0, 38.0, 164.0),
+                50.01,
+            ),
+            (
+                "lap_50pct",
+                (592.0, 25.0, -1479.0),
+                (-996.0, 24.0, -315.0),
+                45.82,
+            ),
+            (
+                "lap_75pct",
+                (837.0, 36.0, -1170.0),
+                (-926.0, 44.0, -560.0),
+                53.11,
+            ),
         ];
 
         for (name, base, display, expected) in cases {

@@ -45,18 +45,30 @@ mod tests {
     #[test]
     fn fresh_heartbeat_is_not_stale() {
         let t0 = Instant::now();
-        assert!(!is_stale(t0, t0 + Duration::from_secs(1), Duration::from_secs(5)));
+        assert!(!is_stale(
+            t0,
+            t0 + Duration::from_secs(1),
+            Duration::from_secs(5)
+        ));
     }
 
     #[test]
     fn heartbeat_older_than_timeout_is_stale() {
         let t0 = Instant::now();
-        assert!(is_stale(t0, t0 + Duration::from_secs(6), Duration::from_secs(5)));
+        assert!(is_stale(
+            t0,
+            t0 + Duration::from_secs(6),
+            Duration::from_secs(5)
+        ));
     }
 
     #[test]
     fn heartbeat_exactly_at_timeout_is_not_yet_stale() {
         let t0 = Instant::now();
-        assert!(!is_stale(t0, t0 + Duration::from_secs(5), Duration::from_secs(5)));
+        assert!(!is_stale(
+            t0,
+            t0 + Duration::from_secs(5),
+            Duration::from_secs(5)
+        ));
     }
 }

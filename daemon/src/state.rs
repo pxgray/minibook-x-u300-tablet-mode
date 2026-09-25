@@ -140,7 +140,8 @@ impl StateMachine {
     fn zone_for(angle_deg: f64, base_tilt_deg: f64, current: HingeState) -> HingeState {
         match current {
             HingeState::Laptop => {
-                let low_side_tablet = angle_deg < TABLET_ENTER_LOW && base_tilt_deg > BASE_TILT_THRESHOLD;
+                let low_side_tablet =
+                    angle_deg < TABLET_ENTER_LOW && base_tilt_deg > BASE_TILT_THRESHOLD;
                 let high_side_tablet = angle_deg > TABLET_ENTER_HIGH;
                 if low_side_tablet || high_side_tablet {
                     HingeState::Tablet
@@ -158,7 +159,12 @@ impl StateMachine {
         }
     }
 
-    pub fn update(&mut self, angle_deg: f64, base_tilt_deg: f64, now: Instant) -> Option<Transition> {
+    pub fn update(
+        &mut self,
+        angle_deg: f64,
+        base_tilt_deg: f64,
+        now: Instant,
+    ) -> Option<Transition> {
         let target = Self::zone_for(angle_deg, base_tilt_deg, self.current);
 
         if target == self.current {
@@ -292,10 +298,7 @@ mod tests {
             None
         );
         assert_eq!(sm.current(), HingeState::Laptop);
-        assert_eq!(
-            sm.update(-39.9, 0.75, t0 + Duration::from_secs(10)),
-            None
-        );
+        assert_eq!(sm.update(-39.9, 0.75, t0 + Duration::from_secs(10)), None);
         assert_eq!(sm.current(), HingeState::Laptop);
     }
 
@@ -335,7 +338,7 @@ mod tests {
         let t0 = Instant::now();
         sm.update(10.0, 20.0, t0);
         sm.update(10.0, 20.0, t0 + Duration::from_millis(800)); // now Tablet
-        // Opens back up past LAPTOP_ENTER_LOW (35).
+                                                                // Opens back up past LAPTOP_ENTER_LOW (35).
         assert_eq!(sm.update(70.0, 20.0, t0 + Duration::from_millis(900)), None);
         let result = sm.update(70.0, 20.0, t0 + Duration::from_millis(1700));
         assert_eq!(result, Some(Transition::ToLaptop));
