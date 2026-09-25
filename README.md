@@ -314,6 +314,13 @@ this repo's conventions: every factual claim about the hardware needs a
 recorded test (or a clear "untested" label), no extrapolating a finding
 from one unit to others without evidence, and no em-dashes in prose.
 
+CI runs on every pull request: `cargo fmt --check`, `cargo clippy -D
+warnings`, and `cargo test` for both Rust crates, ShellCheck on the shell
+scripts, the calibration `--self-test`, and a compile-only build of both
+kernel modules against the CI runner's kernel headers. None of it touches
+real hardware, so a green run is not a substitute for testing on the
+machine.
+
 ## Related projects
 
 Existing community approaches to tablet mode on the MiniBook X mostly
