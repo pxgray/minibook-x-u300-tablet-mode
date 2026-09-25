@@ -1,0 +1,16 @@
+#!/bin/sh
+# Fast formatting check on the Rust crates touched by this commit.
+# Enable with: git config core.hooksPath .githooks
+# Skip once with: git commit --no-verify
+set -eu
+
+status=0
+for crate in daemon dsi-blank-retry; do
+    if git diff --cached --name-only -- "$crate" | grep -q '\.rs$'; then
+        if ! (cd "$crate" && cargo fmt --check >/dev/null); then
+            echo "pre-commit: $crate is not rustfmt-clean; run 'cargo fmt' in $crate/" >&2
+            status=1
+        fi
+    fi
+done
+exit "$status"

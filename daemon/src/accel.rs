@@ -120,11 +120,8 @@ mod tests {
     /// std::fs::remove_dir_all.
     fn make_test_device(x: i64, y: i64, z: i64) -> std::path::PathBuf {
         let n = TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "minibookd-accel-test-{}-{}",
-            std::process::id(),
-            n
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("minibookd-accel-test-{}-{}", std::process::id(), n));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("in_accel_x_raw"), x.to_string()).unwrap();
         std::fs::write(dir.join("in_accel_y_raw"), y.to_string()).unwrap();
@@ -168,11 +165,8 @@ mod tests {
     #[test]
     fn accel_reader_read_recovers_after_one_reopen_on_error() {
         let n = TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "minibookd-accel-test-{}-{}",
-            std::process::id(),
-            n
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("minibookd-accel-test-{}-{}", std::process::id(), n));
         std::fs::create_dir_all(&dir).unwrap();
         // in_accel_x_raw starts out as a directory: File::open succeeds on a
         // directory on Linux, but read_to_string on it fails with EISDIR --
@@ -196,11 +190,8 @@ mod tests {
     #[test]
     fn accel_reader_read_returns_error_when_reopen_also_fails() {
         let n = TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "minibookd-accel-test-{}-{}",
-            std::process::id(),
-            n
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("minibookd-accel-test-{}-{}", std::process::id(), n));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::create_dir(dir.join("in_accel_x_raw")).unwrap();
         std::fs::write(dir.join("in_accel_y_raw"), "2").unwrap();

@@ -83,9 +83,19 @@ fn read_record_from<R: Read>(reader: &mut R) -> io::Result<String> {
     let mut buf = [0u8; 8192];
     loop {
         match reader.read(&mut buf) {
-            Ok(0) => return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "kmsg source returned 0 bytes")),
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "kmsg source returned 0 bytes",
+                ))
+            }
             Ok(n) => return Ok(String::from_utf8_lossy(&buf[..n]).into_owned()),
-            Err(e) if e.kind() == io::ErrorKind::Interrupted || e.kind() == io::ErrorKind::BrokenPipe => continue,
+            Err(e)
+                if e.kind() == io::ErrorKind::Interrupted
+                    || e.kind() == io::ErrorKind::BrokenPipe =>
+            {
+                continue
+            }
             Err(e) => return Err(e),
         }
     }
@@ -228,9 +238,10 @@ mod tests {
     #[test]
     fn read_record_from_propagates_other_errors() {
         let mut fake = FakeRead {
-            results: VecDeque::from(vec![
-                Err(io::Error::new(io::ErrorKind::PermissionDenied, "access denied")),
-            ]),
+            results: VecDeque::from(vec![Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "access denied",
+            ))]),
         };
         let result = read_record_from(&mut fake);
         assert!(result.is_err());
@@ -250,7 +261,10 @@ mod tests {
         };
         let (tx, rx) = mpsc::channel();
         let result = watch(&mut fake, &tx);
-        assert!(result.is_err(), "watch should end when the fake source errors");
+        assert!(
+            result.is_err(),
+            "watch should end when the fake source errors"
+        );
         assert_eq!(
             result.unwrap_err().kind(),
             io::ErrorKind::UnexpectedEof,
@@ -270,7 +284,9 @@ mod tests {
 
     #[test]
     fn startup_repair_not_needed_on_a_clean_boot() {
-        assert!(!needs_startup_repair(["i915 0000:00:02.0: [drm] GT0: GUC: RC enabled"]));
+        assert!(!needs_startup_repair([
+            "i915 0000:00:02.0: [drm] GT0: GUC: RC enabled"
+        ]));
     }
 
     #[test]

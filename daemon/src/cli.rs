@@ -26,16 +26,12 @@ pub fn parse(args: &[String]) -> Result<Cli, String> {
             "--revert-only" => revert_only = true,
             "--acpi-path" => {
                 i += 1;
-                acpi_path = args
-                    .get(i)
-                    .ok_or("--acpi-path requires a value")?
-                    .clone();
+                acpi_path = args.get(i).ok_or("--acpi-path requires a value")?.clone();
             }
             "--display-accel" => {
                 i += 1;
-                display_accel = PathBuf::from(
-                    args.get(i).ok_or("--display-accel requires a value")?,
-                );
+                display_accel =
+                    PathBuf::from(args.get(i).ok_or("--display-accel requires a value")?);
             }
             "--base-accel" => {
                 i += 1;

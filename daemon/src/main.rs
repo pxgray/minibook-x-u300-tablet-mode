@@ -152,8 +152,7 @@ fn main() -> ExitCode {
         // actual hinge angle rather than trusting whatever the state
         // machine last believed, in case the EC reset its keyboard-disable
         // register across suspend independently of the daemon.
-        let mut signals =
-            Signals::new([SIGUSR1]).expect("failed to install SIGUSR1 handler");
+        let mut signals = Signals::new([SIGUSR1]).expect("failed to install SIGUSR1 handler");
         let opts_for_signal = Arc::clone(&opts);
         let sw = Arc::clone(&uinput_switch);
         let sm = Arc::clone(&state_machine);
@@ -287,10 +286,14 @@ fn main() -> ExitCode {
 fn lock_switch(
     switch: &Mutex<Option<uinput::TabletSwitch>>,
 ) -> std::sync::MutexGuard<'_, Option<uinput::TabletSwitch>> {
-    switch.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    switch
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn lock_state(state_machine: &Mutex<state::StateMachine>) -> std::sync::MutexGuard<'_, state::StateMachine> {
+fn lock_state(
+    state_machine: &Mutex<state::StateMachine>,
+) -> std::sync::MutexGuard<'_, state::StateMachine> {
     state_machine
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -330,7 +333,11 @@ fn handle_transition(
     if opts.dry_run {
         println!(
             "minibookd: [dry-run] would transition to {}",
-            if target == HingeState::Tablet { "Tablet" } else { "Laptop" }
+            if target == HingeState::Tablet {
+                "Tablet"
+            } else {
+                "Laptop"
+            }
         );
         return;
     }
@@ -474,7 +481,10 @@ mod tests {
 
     #[test]
     fn resets_display_when_reconciling_from_tablet_to_laptop() {
-        assert!(needs_display_reset(Some(HingeState::Tablet), HingeState::Laptop));
+        assert!(needs_display_reset(
+            Some(HingeState::Tablet),
+            HingeState::Laptop
+        ));
     }
 
     #[test]
@@ -489,12 +499,18 @@ mod tests {
     fn does_not_reset_display_when_already_laptop() {
         // Steady-state resume-while-already-Laptop: nothing changed, no
         // reason to touch Mutter's rotation config.
-        assert!(!needs_display_reset(Some(HingeState::Laptop), HingeState::Laptop));
+        assert!(!needs_display_reset(
+            Some(HingeState::Laptop),
+            HingeState::Laptop
+        ));
     }
 
     #[test]
     fn does_not_reset_display_when_target_is_tablet() {
-        assert!(!needs_display_reset(Some(HingeState::Laptop), HingeState::Tablet));
+        assert!(!needs_display_reset(
+            Some(HingeState::Laptop),
+            HingeState::Tablet
+        ));
         assert!(!needs_display_reset(None, HingeState::Tablet));
     }
 

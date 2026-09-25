@@ -87,8 +87,7 @@ pub const HINGE_AXIS: (f64, f64, f64) = (-0.004605, 0.999986, 0.002757);
 /// Fixed rotation from base-referenced coordinates into the display
 /// sensor's own raw frame, as a unit quaternion (w, x, y, z). Fitted by
 /// scripts/calibrate_hinge_axis.py.
-pub const MOUNT_ROTATION: (f64, f64, f64, f64) =
-    (-0.816673, 0.007937, -0.576892, 0.013306);
+pub const MOUNT_ROTATION: (f64, f64, f64, f64) = (-0.816673, 0.007937, -0.576892, 0.013306);
 
 /// Signed, offset-corrected, tilt-corrected hinge angle in degrees, range
 /// (-180, 180]. Unlike `hinge_angle`, this corrects for each sensor's own
@@ -97,10 +96,7 @@ pub const MOUNT_ROTATION: (f64, f64, f64, f64) =
 /// offset-corrected base reading is too close to parallel with the hinge
 /// axis to define a stable reference direction in the perpendicular plane
 /// -- a degenerate orientation not expected in normal use.
-pub fn signed_hinge_angle(
-    base_raw: (f64, f64, f64),
-    display_raw: (f64, f64, f64),
-) -> Option<f64> {
+pub fn signed_hinge_angle(base_raw: (f64, f64, f64), display_raw: (f64, f64, f64)) -> Option<f64> {
     let u = normalize(sub3(base_raw, BASE_OFFSET));
     let w = normalize(sub3(display_raw, DISPLAY_OFFSET));
 
@@ -204,7 +200,10 @@ mod tests {
     // calibration attempt.
     #[test]
     fn signed_hinge_angle_matches_python_reference_for_all_readings() {
-        let cases: &[(&str, (f64, f64, f64), (f64, f64, f64), f64)] = &[
+        // (name, base, display, expected signed angle in degrees)
+        type Case = (&'static str, (f64, f64, f64), (f64, f64, f64), f64);
+        #[rustfmt::skip]
+        let cases: &[Case] = &[
             ("typing_desk", (-3.0, 8.0, -1632.0), (-787.0, 36.0, 450.0), 57.98),
             ("flat_open_desk", (13.0, 2.0, -1620.0), (3.0, 21.0, 809.0), 110.43),
             ("folded_tablet_desk", (2.0, -6.0, 426.0), (3.0, 26.0, 793.0), -70.42),

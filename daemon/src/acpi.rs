@@ -28,7 +28,9 @@ pub fn parse_response(s: &str) -> Result<u32, String> {
 }
 
 pub fn set_tablet_mode(path: &str, enable: bool) -> io::Result<u32> {
-    let _guard = CALL_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = CALL_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let call = format_call(path, enable);
     std::fs::write(ACPI_CALL_PATH, call)?;
     let response = std::fs::read_to_string(ACPI_CALL_PATH)?;

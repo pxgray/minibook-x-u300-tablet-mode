@@ -36,13 +36,21 @@ pub fn reset_rotation_args() -> Vec<String> {
         "org.gnome.Mutter.DisplayConfig",
         "ApplyMonitorsConfig",
         APPLY_MONITORS_CONFIG_SIGNATURE,
-        "1",     // serial (GetCurrentState's serial is not checked by Mutter
+        "1", // serial (GetCurrentState's serial is not checked by Mutter
         // for ApplyMonitorsConfig in practice, but the argument is required)
-        "1",     // method: 1 = temporary, doesn't rewrite monitors.xml, so a
+        "1", // method: 1 = temporary, doesn't rewrite monitors.xml, so a
         // manual change made between two of our transitions is only
         // overridden until the next one rather than permanently clobbered
-        "1", "0", "0", SCALE, "0", "true", // logical_monitors[0]: x, y, scale, transform=normal, primary
-        "1", CONNECTOR, MODE_ID, "0", // monitors[0]: connector, mode_id, {}
+        "1",
+        "0",
+        "0",
+        SCALE,
+        "0",
+        "true", // logical_monitors[0]: x, y, scale, transform=normal, primary
+        "1",
+        CONNECTOR,
+        MODE_ID,
+        "0", // monitors[0]: connector, mode_id, {}
         "0", // top-level properties: {}
     ]
     .into_iter()
@@ -71,7 +79,9 @@ pub fn reset_rotation() -> io::Result<()> {
     if status.success() {
         Ok(())
     } else {
-        Err(io::Error::other(format!("runuser busctl exited with {status}")))
+        Err(io::Error::other(format!(
+            "runuser busctl exited with {status}"
+        )))
     }
 }
 

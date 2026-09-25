@@ -82,6 +82,9 @@ sudo -b sh -c "sleep $hold_seconds; echo '$ltsm_path 0x0' > /proc/acpi/call"
 
 if [ -n "$hid_devnode" ]; then
     echo "== Capturing $hid_devnode for ${hold_seconds}s =="
+    # Only evtest needs root; the redirect is deliberately done by the
+    # unprivileged shell so the log stays user-owned and readable.
+    # shellcheck disable=SC2024
     sudo timeout "$hold_seconds" evtest "$hid_devnode" > /tmp/evtest_capture.log 2>&1 &
     sleep 0.3
 fi
