@@ -321,6 +321,12 @@ kernel modules against the CI runner's kernel headers. None of it touches
 real hardware, so a green run is not a substitute for testing on the
 machine.
 
+To catch the same failures locally, enable the repo's git hooks once per
+clone with `git config core.hooksPath .githooks`. The pre-commit hook
+checks formatting of the crates a commit touches; the pre-push hook runs
+fmt, clippy, and ShellCheck (install it with `sudo pacman -S shellcheck`).
+Skip either with `--no-verify`.
+
 ## Related projects
 
 Existing community approaches to tablet mode on the MiniBook X mostly

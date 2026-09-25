@@ -35,7 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: shellcheck scripts/*.sh systemd/system-sleep/minibookd
+      - run: shellcheck scripts/*.sh systemd/system-sleep/minibookd .githooks/*
 
   calibration-self-test:
     runs-on: ubuntu-latest
